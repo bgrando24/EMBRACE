@@ -54,5 +54,25 @@ def get_user_watch_hist(user_id: str, num_days: int, is_aggregated=False,):
     Returns:
         dict: The user's watch history data as a JSON-decoded dictionary
     """
-    return requests.get(f"{BASE_DOMAIN}/user_usage_stats/UserPlaylist?user_id={user_id}&aggregate_data={is_aggregated}&days={num_days}&api_key={EMBY_API_KEY}'").json()
+    return requests.get(f"{BASE_DOMAIN}/user_usage_stats/UserPlaylist?user_id={user_id}&aggregate_data={is_aggregated}&days={num_days}&api_key={EMBY_API_KEY}").json()
 
+# Typing the returned data from get_user_watch_hist
+UserWatchHistory = [
+    {
+        "date": str,            # yyy-MM-dd 
+        "time": str,            # 04:17:06
+        "user_id": str,         # User's Emby ID
+        "item_name": str,       # Letterkenny - s01e02 - Super Soft Birthday
+        "item_id": int,         # 528946
+        "item_type": str,       # "Episode", "Movie"
+        "duration": str,        # in seconds: e.g. 25 minutes = (approx) 1563 seconds
+        "remote_address": str,  # Subnet addr of device used by the user
+        "user_name": str,       # Emby username
+        "user_has_image": bool  # Whether user has profile image (?)
+    }
+]
+
+# testing functions
+users = get_all_emby_users()
+bgmd_hist = get_user_watch_hist(users["bgmd"], 10)
+print(bgmd_hist)

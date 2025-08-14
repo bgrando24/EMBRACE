@@ -1,4 +1,4 @@
-# EMBRACE - ***Emb***y ***R***ecommendation ***a***nd ***C***ontext ***E***ngine
+# EMBRACE - **_Emb_**y **_R_**ecommendation **_a_**nd **_C_**ontext **_E_**ngine
 
 EMBRACE is an intelligent and personalised recommendation engine for (Emby) [https://emby.media/].
 
@@ -12,4 +12,6 @@ Environment variables are defined in the `.env` file, located at the root of the
 
 -   **`EMBY_API_KEY`**: Your Emby server's API key. You can obtain this by going to: `[Your Emby Server URL]/web/index.html#!/dashboard` -> scroll down, at the bottom of the page is a link labelled "API". This will take you to the Swapper API webpage for your server.
 
--   **`ENVIRONEMNT`**: Specifies the runtime environment, values: "dev" | "staging" | "prod".
+-   **`ENVIRONMENT`**: Specifies the runtime environment, values: "dev" | "staging" | "prod".
+
+-   **`SQLITE_DB_NAME`**:

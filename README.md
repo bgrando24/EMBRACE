@@ -1,6 +1,6 @@
 # EMBRACE - <b><i>Emb</i></b>y <b><i>R</i></b>ecommendation <b><i>a</i></b>nd <b><i>C</i></b>ontext <b><i>E</i></b>ngine
 
-EMBRACE is an intelligent and personalised recommendation engine for (Emby) [https://emby.media/].
+EMBRACE is an intelligent and personalised recommendation engine for [Emby](https://emby.media/).
 
 # Documentation
 
@@ -10,12 +10,17 @@ min python version: 3.9.6
 
 ---
 
+</br></br>
+
 ## Building and running the Docker container
 
 Build: `docker build -t <container_name> .`
+
 Run: `docker run --env-file .env <container_name>`
 
 ---
+
+</br></br>
 
 ## Environment Variables
 

@@ -9,6 +9,7 @@ class EmbyConnector:
     Provides functionality for communicating with the Emby API
     """
     
+    # TODO: add logic to check for existing DB
     def __init__(self, BASE_DOMAIN, EMBY_API_KEY, debug = False):
         """
         Args:
@@ -21,10 +22,10 @@ class EmbyConnector:
         
         # exit if variables are unavailable
         if BASE_DOMAIN is None:
-            if self._debug: print("Error: BASE_DOMAIN environment variable is not set.", file=sys.stderr)
+            print("Error: BASE_DOMAIN environment variable is not set.", file=sys.stderr)
             exit(1)
         if EMBY_API_KEY is None:
-            if self._debug: print("Error: EMBY_API_KEY environment variable is not set.", file=sys.stderr)
+            print("Error: EMBY_API_KEY environment variable is not set.", file=sys.stderr)
             exit(1)
         
         self.__BASE_DOMAIN: Final   = BASE_DOMAIN

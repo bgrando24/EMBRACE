@@ -14,4 +14,4 @@ Environment variables are defined in the `.env` file, located at the root of the
 
 -   **`ENVIRONMENT`**: Specifies the runtime environment, values: "dev" | "staging" | "prod".
 
--   **`SQLITE_DB_NAME`**:
+-   **`SQLITE_DB_NAME`**: (Optional) Name of the SQLite database. **Default is "EMBRACE_SQLITE_DB.db"**.

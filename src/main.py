@@ -26,5 +26,7 @@ bgmd_hist = Emby.get_user_watch_hist(users["bgmd"], 10)
 # print(bgmd_hist)
 
 # test db connection
-sqlite = SQLiteConnector(SQLITE_DB_NAME)
+sqlite = SQLiteConnector(SQLITE_DB_NAME, debug=True)
 sqlite.connect_db()
+result = sqlite.INIT_create_user_watch_hist_schemas()
+print(f"DB INIT_create_user_watch_hist_schemas result: {result}")

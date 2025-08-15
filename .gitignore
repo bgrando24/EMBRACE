@@ -2,3 +2,4 @@
 .env
 /src/__pycache__
 /sqlite_db/*
+/site

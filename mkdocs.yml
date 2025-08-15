@@ -1,0 +1,9 @@
+site_name: EMBRACE - Documentation
+nav:
+    - Home: index.md
+    - Environment Variables: env_vars.md
+    - Databases:
+          - SQLite: databases/sqlite.md
+
+# for local use
+use_directory_urls: false

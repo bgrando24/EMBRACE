@@ -73,7 +73,7 @@ class SQLiteConnector:
         """
 
         # check db connection and cursor actually exist
-        if (self._connection is None):
+        if self._connection is None:
             if self._debug: print(f"[SQliteConnector] ERROR: Database connection not found when attempting to create schema!", file=sys.stderr)
             return False
         if self._cursor is None:
@@ -206,10 +206,14 @@ class SQLiteConnector:
             emby_watch_hist_func (() -> T_EmbyUserWatchHistResponse): Emby connector function that fetches all user watch history
         """
         
-        # start fresh with clean table
+        if self._connection is None:
+            if self._debug: print(f"[SQliteConnector] ERROR: Database connection not found when attempting to create schema!", file=sys.stderr)
+            return False
         if self._cursor is None:
             if self._debug: print(f"[SQliteConnector] ERROR: Database cursor not found when attempting to create schema!", file=sys.stderr)
             return False
+        
+        # start fresh with clean table
         try:
             self._cursor.execute("DROP TABLE IF EXISTS watch_hist_raw_events")
             self._INIT_create_user_watch_hist_schemas()
@@ -219,19 +223,65 @@ class SQLiteConnector:
             
         # TODO: how to better handle the number of days of watch history to fetch? e.g. exp backfill
         if self._debug: print("[SQLiteConnector] Fetching watch history from Emby for all users")
-        all_usr_hist = emby_watch_hist_func(1000, False)
+        all_usr_hist = emby_watch_hist_func(2000, False)
         
-        # prep raw data for bulk insert -> transform into tuples for 
-        raw_data = []
-        total_events = 0
+        # handle empty history, don't bother processing
+        # if len(all_usr_hist.items()) >= 0:
+        #     if self._debug:
+        #             print("[SQLiteConnector] ERROR: No watch history found!")
+        #     return False
         
         
+        # prep raw data for bulk insert -> transform into tuples for better insertion
+        # see the watch_hist_raw_events schema for reference as to how the table is structured
+        raw_events_data = []
+        
+        for username, data in all_usr_hist.items():
+            for event in data:
+                raw_events_data.append([
+                    event["date"],
+                    event['time'], 
+                    event['user_id'],
+                    event['item_name'],
+                    event['item_id'],
+                    event['item_type'],
+                    int(event['duration']),
+                    event.get('remote_address', ''),  # optional field
+                    event['user_name']
+                ])
+
+            if self._debug:
+                print(f"Found {len(data)} events for user: {username}\n")
+             
+            try:
+                # don't wait for data to be fullly written to disk: https://www.sqlite.org/pragma.html#pragma_synchronous
+                self._cursor.execute("PRAGMA synchronous = OFF")
+                # store rollback journal in RAM instead of disk: https://www.sqlite.org/pragma.html#pragma_journal_mode
+                self._cursor.execute("PRAGMA journal_mode = MEMORY")
+                # make all inserts an atomic transaction (either all records succeed, or none)
+                self._cursor.execute("BEGIN TRANSACTION")
+                
+                self._cursor.executemany(
+                    """INSERT OR IGNORE INTO watch_hist_raw_events 
+                    (date, time, user_id, item_name, item_id, item_type, 
+                        duration, remote_address, user_name)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    raw_events_data
+                )
+                
+                self._connection.commit()
+                
+                # reset pragmas
+                self._cursor.execute("PRAGMA synchronous = NORMAL")
+                self._cursor.execute("PRAGMA journal_mode = DELETE")
+                
+                if self._debug:
+                    print(f"[SQLiteConnector] Successfully inserted {len(raw_events_data)} raw watch events!")
+                    print(f"[SQLiteConnector] Total users processed: {len(all_usr_hist)}")
+                
+            except:
+                return False
         
         return True
-# -----------------------     
-        
-        
-        
-        
-        
-        
+# -----------------------
+

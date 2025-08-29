@@ -2,7 +2,7 @@ from typing import Final
 import requests
 import sys
 
-from custom_types import T_EmbyUserWatchHistResponse, T_EmbyUsersResponse
+from custom_types import T_EmbyUserWatchHistResponse, T_EmbyUsersResponse, T_EmbyAllUserWatchHist
 
 class EmbyConnector:
     """
@@ -59,15 +59,35 @@ class EmbyConnector:
         return users
 
 
-    def get_user_watch_hist(self, user_id: str, num_days: int, is_aggregated=False,) -> T_EmbyUserWatchHistResponse:
-        
+    def get_user_watch_hist(self, user_id: str, num_days: int | None = None, is_aggregated=False,) -> T_EmbyUserWatchHistResponse:
         """
         Fetch the watch history for a user
         Args:
             user_id (str): User's Emby ID
-            num_days (int): The number of days to look back for watch history
+            num_days (int): The number of days of watch history to fetch
             is_aggregated (bool, optional): Whether to aggregate the data, defaults to False
         Returns:
             dict: The user's watch history data as a JSON-decoded dictionary
         """
         return requests.get(f"{self.__BASE_DOMAIN}/user_usage_stats/UserPlaylist?user_id={user_id}&aggregate_data={is_aggregated}&days={num_days}&api_key={self.__EMBY_API_KEY}").json()
+    
+    
+    def get_all_watch_hist(self, num_days: int, is_aggregated=False) -> T_EmbyAllUserWatchHist:
+        """
+        Fetch watch history for all Emby users. Uses get_all_emby_users()
+        Args:
+            num_days (int): The number of days of watch history to fetch
+            is_aggregated (bool, optional): Whether to aggregate the data, defaults to False
+        Returns:
+            dict: Keys = username, values = T_EmbyUserWatchHistResponse for that user
+        """
+        # get all users, loop through and fetch watch history for each user, build dictionary of results
+        users = self.get_all_emby_users()
+        all_watch_hist: T_EmbyAllUserWatchHist = {}
+        for username, user_id in users.items():
+            watch_data = self.get_user_watch_hist(user_id, num_days)
+            all_watch_hist[username] = watch_data
+        
+        return all_watch_hist
+            
+        

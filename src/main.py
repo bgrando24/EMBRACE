@@ -22,9 +22,13 @@ users = Emby.get_all_emby_users()
 # print(users)
 bgmd_hist = Emby.get_user_watch_hist(users["bgmd"], 10)
 # print(bgmd_hist)
+# all_user_hist = Emby.get_all_watch_hist(1)
+# print(all_user_hist)
 
-# test db connection
+# test db connection and watch history tables
 sqlite = SQLiteConnector(SQLITE_DB_NAME, debug=True)
 sqlite.connect_db()
-result = sqlite.INIT_create_user_watch_hist_schemas()
-print(f"DB INIT_create_user_watch_hist_schemas result: {result}")
+sqlite._INIT_create_user_watch_hist_schemas()
+# sqlite._INIT_POPULATE_watch_hist_raw_events(Emby.get_all_watch_hist)
+
+

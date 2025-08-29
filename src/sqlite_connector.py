@@ -2,14 +2,23 @@ import sqlite3
 import sys
 from typing import Optional, Final
 import os
+from typing import Callable
+from custom_types import T_EmbyAllUserWatchHist
+from emby_connector import EmbyConnector
 
 class SQLiteConnector:
+    # TODO: Consider placing table names into a class-global structure?
+    
     """
-    Provides functionality for interfacing with the app's SQLite database
+    Provides functionality for interfacing with the app's SQLite database.
+    
+    NOTE: Fuctions prefixed with `_INIT_` are initialisation functions, they should only need to be ran at system start-up/creation.
     
     Attributes:
         _connection (Optional[sqlite3.Connection]): The database connection object. Method 'connect_db()' must be executed to obtain this object.
         cursor (sqlite3.Cursor): DB cursor used to execute queries. Method 'connect_db()' must be executed to set the cursor.
+        
+    
     """
     _cursor: Optional[sqlite3.Cursor]
     _connection: Optional[sqlite3.Connection]
@@ -47,7 +56,7 @@ class SQLiteConnector:
     
     # ================================== Setup methods ==================================
 
-    def INIT_create_user_watch_hist_schemas(self) -> bool:
+    def _INIT_create_user_watch_hist_schemas(self) -> bool:
         """
         Creates (if doesn't exist) the full schema/tables for the user watch history data.
         
@@ -56,7 +65,7 @@ class SQLiteConnector:
         ---
         Tables: 
         
-        `watch_hist_raw_events` (user watch his verbatum from the Emby API)
+        `watch_hist_raw_events` (user watch hist verbatum from the Emby API)
         
         `watch_hist_agg_sessions` (Aggregated user sessions)
         
@@ -155,5 +164,74 @@ class SQLiteConnector:
             
         except sqlite3.Error as e:
             if self._debug: print(f"[SQLiteConnector] ERROR: Failed to create user watch history schemas schema: {e}", file=sys.stderr)
+            return False    
+# -----------------------
+    
+    def _INIT_DROP_user_watch_hist_schemas(self) -> bool:
+        """
+        **DROP** all user watch history tables
+
+        ---
+        Tables:
+        `watch_hist_raw_events` - `watch_hist_agg_sessions` - `watch_hist_user_item_stats`
+        """
+        
+        # check db connection and cursor actually exist
+        if (self._connection is None):
+            if self._debug: print(f"[SQliteConnector] ERROR: Database connection not found when attempting to create schema!", file=sys.stderr)
             return False
+        if self._cursor is None:
+            if self._debug: print(f"[SQliteConnector] ERROR: Database cursor not found when attempting to create schema!", file=sys.stderr)
+            return False
+        
+        try:
+            self._cursor.execute("DROP TABLE IF EXISTS watch_hist_raw_events")
+            self._cursor.execute("DROP TABLE IF EXISTS watch_hist_agg_sessions")
+            self._cursor.execute("DROP TABLE IF EXISTS watch_hist_user_item_stats")
+            
+            if self._debug: print("[SQLiteConnector] Watch history schemas DROPPED successfully!")
+            return True
+        except sqlite3.Error as e:
+            if self._debug: print(f"[SQLiteConnector] ERROR: Failed to DROP user watch history schemas: {e}", file=sys.stderr)
+            return False 
+# -----------------------        
+        
+    def _INIT_POPULATE_watch_hist_raw_events(self, emby_watch_hist_func: Callable[[int, bool], T_EmbyAllUserWatchHist]) -> bool:
+        """
+        **WARNING: THIS WILL FIRST DROP ALL DATA IN THE `watch_hist_raw_events` TABLE**
+        
+        Populates the watch_hist_raw_events table rows with the all available historical data from the Emby API.
+        
+        Args:
+            emby_watch_hist_func (() -> T_EmbyUserWatchHistResponse): Emby connector function that fetches all user watch history
+        """
+        
+        # start fresh with clean table
+        if self._cursor is None:
+            if self._debug: print(f"[SQliteConnector] ERROR: Database cursor not found when attempting to create schema!", file=sys.stderr)
+            return False
+        try:
+            self._cursor.execute("DROP TABLE IF EXISTS watch_hist_raw_events")
+            self._INIT_create_user_watch_hist_schemas()
+        except sqlite3.Error as e:
+            if self._debug: print(f"[SQLiteConnector] ERROR: Failed to DROP watch_hist_raw_events table: {e}", file=sys.stderr)
+            return False 
+            
+        # TODO: how to better handle the number of days of watch history to fetch? e.g. exp backfill
+        if self._debug: print("[SQLiteConnector] Fetching watch history from Emby for all users")
+        all_usr_hist = emby_watch_hist_func(1000, False)
+        
+        # prep raw data for bulk insert -> transform into tuples for 
+        raw_data = []
+        total_events = 0
+        
+        
+        
+        return True
+# -----------------------     
+        
+        
+        
+        
+        
         

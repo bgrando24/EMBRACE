@@ -16,6 +16,8 @@ class T_EmbyUserWatchHistItem(TypedDict):
 #: Full response type from user watch history endpoint: /user_usage_stats/UserPlaylist
 T_EmbyUserWatchHistResponse = List[T_EmbyUserWatchHistItem]
 
+T_EmbyAllUserWatchHist = dict[str, T_EmbyUserWatchHistResponse]
+
 class T_EmbyUser(TypedDict):
     """User data from Emby API"""
     Name: str

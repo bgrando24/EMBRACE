@@ -672,7 +672,6 @@ class SQLiteConnector:
         return True
 # -------------------------------------------
 
-    
     def update_completion_ratios(self):
         """
         Update completion ratios in sessions table using actual runtime data
@@ -819,9 +818,6 @@ class SQLiteConnector:
         return True
 # ----------------------------------
 
-
-    
-
     
     def _ensure_provider_ids_schema(self):
         sql = """
@@ -958,3 +954,57 @@ class SQLiteConnector:
 
 
     
+    # ====================================================================== TMDB Tables ======================================================================
+    
+    def _INIT_create_tmdb_schemas(self):
+        """
+        Creates (if doesn't exist) the full table schemas for TMDB data.
+        
+        ---
+        Tables: 
+        
+        `movie_genres`: MOVIE genres as strings, and as the ID values TMDB uses to references genres
+        
+        `tv_genres`: TV genres as strings, and as the ID values TMDB uses to references genres
+        """
+        if self._connection is None or self._cursor is None:
+            print("[SQLiteConnector] ERROR: DB not connected", file=sys.stderr)
+            return False
+        
+        # CREATE TABLE IF NOT EXISTS watch_hist_raw_events(
+        #         row_id INTEGER PRIMARY KEY AUTOINCREMENT, 
+        #         date TEXT NOT NULL, 
+        #         time TEXT NOT NULL, 
+        #         user_id TEXT NOT NULL,
+        #         item_name TEXT NOT NULL,
+        #         item_id TEXT NOT NULL,
+        #         item_type TEXT NOT NULL,
+        #         duration INTEGER NOT NULL,
+        #         remote_address TEXT,
+        #         user_name TEXT NOT NULL
+        
+        movie_genres_schema = """
+            CREATE TABLE IF NOT EXISTS tmdb_movie_genres(
+                genre_id INTEGER PRIMARY KEY UNIQUE NOT NULL,
+                genre_string TEXT UNIQUE NOT NULL
+            )
+        """
+        
+        tv_genres_schema = """
+            CREATE TABLE IF NOT EXISTS tmdb_tv_genres(
+                genre_id INTEGER PRIMARY KEY UNIQUE NOT NULL,
+                genre_string TEXT UNIQUE NOT NULL
+            )
+        """
+        
+        try:
+            self._cursor.execute(movie_genres_schema)
+            self._cursor.execute(tv_genres_schema)
+            
+            self._connection.commit()
+            
+            if self._debug: print("[SQLiteConnector] TMDB schemas created successfully!")
+            
+        except sqlite3.Error as e:
+            if self._debug: print(f"[SQLiteConnector] ERROR: Failed to create TMDB schemas: {e}", file=sys.stderr)
+            return False 

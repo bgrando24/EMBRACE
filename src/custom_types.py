@@ -18,6 +18,8 @@ T_EmbyUserWatchHistResponse = List[T_EmbyUserWatchHistItem]
 
 T_EmbyAllUserWatchHist = dict[str, T_EmbyUserWatchHistResponse]
 
+# T_EmbyWatchHistStatSingleUsr = 
+
 class T_EmbyUser(TypedDict):
     """User data from Emby API"""
     Name: str

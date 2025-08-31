@@ -7,6 +7,7 @@ from typing import Final
 from emby_connector import EmbyConnector
 from sqlite_connector import SQLiteConnector
 from tmdb_connector import TMDBConnector
+from analytics import Analytics
 
 # load and extract env variables
 load_dotenv()
@@ -49,6 +50,13 @@ sqlite._INIT_POPULATE_watch_hist_user_item_stats()
 sqlite.update_completion_ratios()
 
 #create and ingest TMDB tables
-# print(TMDB.fetch_movie_genres())
 sqlite._INIT_create_tmdb_schemas()
 sqlite.ingest_tmdb_movie_tv_genres(TMDB.fetch_movie_genres, TMDB.fetch_tv_genres)
+
+# basic analytics testing
+if sqlite._connection is not None:
+    A = Analytics(sqlite._connection)
+else:
+    raise RuntimeError("Failed to establish SQLite connection for Analytics class")
+
+print(A.get_user_item_stats())

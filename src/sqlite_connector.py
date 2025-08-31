@@ -14,7 +14,7 @@ class SQLiteConnector:
     """
     Provides functionality for interfacing with the app's SQLite database.
     
-    NOTE: Fuctions prefixed with `_INIT_` are initialisation functions, they should only need to be ran at system start-up/creation.
+    NOTE: Functions prefixed with `_INIT_` are initialisation functions, they should only need to be ran at system start-up/creation.
     
     Attributes:
         _connection (Optional[sqlite3.Connection]): The database connection object. Method 'connect_db()' must be executed to obtain this object.

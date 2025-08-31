@@ -6,6 +6,8 @@ Environment variables are defined in the `.env` file, located at the root of the
 
 -   **`EMBY_API_KEY`**: Your Emby server's API key. You can obtain this by going to: `[Your Emby Server URL]/web/index.html#!/dashboard` -> scroll down, at the bottom of the page is a link labelled "API". This will take you to the Swapper API webpage for your server.
 
+-   **`TMDB_READ_ACCESS_TOKEN`**: Your TMDB account's [read access token](https://www.themoviedb.org/settings/api). **This is NOT your account's `API key`**
+
 -   **`ENVIRONMENT`**: Specifies the runtime environment, values: "dev" | "staging" | "prod".
 
 -   **`SQLITE_DB_NAME`**: (Optional) Name of the SQLite database. **Default is "EMBRACE_SQLITE_DB.db"**.

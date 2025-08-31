@@ -6,16 +6,19 @@ from typing import Final
 # our modules
 from emby_connector import EmbyConnector
 from sqlite_connector import SQLiteConnector
+from tmdb_connector import TMDBConnector
 
 # load and extract env variables
 load_dotenv()
 BASE_DOMAIN: Final = os.getenv("BASE_DOMAIN")
 EMBY_API_KEY: Final = os.getenv("EMBY_API_KEY")
+TMDB_READ_ACCESS_TOKEN: Final = os.getenv("TMDB_READ_ACCESS_TOKEN")
 ENVIRONMENT: Final = os.getenv("ENVIRONMENT") or "dev"
 SQLITE_DB_NAME: Final = os.getenv("SQLITE_DB_NAME") or "EMBRACE_SQLITE_DB.db"
 
-# init emby API conenctor
+# init API connectors
 Emby = EmbyConnector(BASE_DOMAIN, EMBY_API_KEY, debug=(ENVIRONMENT == "dev"))
+TMDB = TMDBConnector(TMDB_READ_ACCESS_TOKEN, debug=(ENVIRONMENT == "dev"))
 
 # testing functions
 users = Emby.get_all_emby_users()
@@ -28,14 +31,17 @@ bgmd_hist = Emby.get_user_watch_hist(users["bgmd"], 10)
 # test db connection and watch history tables
 sqlite = SQLiteConnector(SQLITE_DB_NAME, debug=True)
 sqlite.connect_db()
-# Ingest library metadata first so runtime is available for later calculations
-sqlite._INIT_create_library_items_schema()
-ok = sqlite.ingest_all_library_items(Emby.iter_all_items())
-print("Ingest complete:", ok)
+# ingest library metadata first so runtime is available for later calculations
+# sqlite._INIT_create_library_items_schema()
+# ok = sqlite.ingest_all_library_items(Emby.iter_all_items())
+# print("Ingest complete:", ok)
 
-# Now process watch history using actual runtimes
-sqlite._INIT_POPULATE_watch_hist_raw_events(Emby.get_all_watch_hist)
-sqlite._INIT_POPULATE_watch_hist_agg_sessions()
-sqlite._INIT_POPULATE_watch_hist_user_item_stats()
-sqlite.update_completion_ratios()
+# process watch history using actual runtimes
+# sqlite._INIT_POPULATE_watch_hist_raw_events(Emby.get_all_watch_hist)
+# sqlite._INIT_POPULATE_watch_hist_agg_sessions()
+# sqlite._INIT_POPULATE_watch_hist_user_item_stats()
+# sqlite.update_completion_ratios()
 
+#test TMDB connector
+movie_genres = TMDB.fetch_movie_genres()
+print(movie_genres)

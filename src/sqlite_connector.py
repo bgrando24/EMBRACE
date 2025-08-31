@@ -3,7 +3,7 @@ import sqlite3
 import sys
 from typing import Optional, Final
 import os
-from typing import Callable
+from typing import Callable, Dict
 from custom_types import T_EmbyAllUserWatchHist
 from datetime import datetime, timedelta
 
@@ -849,12 +849,12 @@ class SQLiteConnector:
             print("[SQLiteConnector] ERROR: DB not connected", file=sys.stderr)
             return False
 
-        # Ensure schemas exist
+        # check schemas exist
         if not self._INIT_create_library_items_schema():
             return False
-        self._ensure_provider_ids_schema()  # see helper below
+        self._ensure_provider_ids_schema()
 
-        # Upserts
+        # upserts
         upsert_item_sql = """
         INSERT OR REPLACE INTO library_items(
             item_id, item_name, item_type,
@@ -1007,4 +1007,20 @@ class SQLiteConnector:
             
         except sqlite3.Error as e:
             if self._debug: print(f"[SQLiteConnector] ERROR: Failed to create TMDB schemas: {e}", file=sys.stderr)
-            return False 
+            return False
+        
+        
+    def ingest_tmdb_movie_tv_genres(self, fetch_movie_genre_func: Callable[[], Dict[int, str]], fetch_tv_genre_func: Callable[[], Dict[int, str]]):
+        """Fetch ALL the genres for BOTH movies and tv shows from TMDB, then ingest them into their appropriate tables"""
+        
+        movie_genres_data = fetch_movie_genre_func
+        tv_genres_data = fetch_tv_genre_func
+        
+        upsert_movie_genres = """
+        INSERT OR REPLACE INTO tmdb_movie_genres(
+            item_id, item_name, item_type,
+            series_name, series_id, season_number, episode_number,
+            runtime_ticks, premiere_date, overview, community_rating, production_year,
+            file_path, container, video_codec, resolution_width, resolution_height
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """

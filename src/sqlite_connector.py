@@ -4,7 +4,8 @@ import sys
 from typing import Optional, Final
 import os
 from typing import Callable, Dict
-from custom_types import T_EmbyAllUserWatchHist
+import zlib
+from custom_types import T_EmbyAllUserWatchHist, T_TMDBGenres
 from datetime import datetime, timedelta
 
 class SQLiteConnector:
@@ -765,10 +766,10 @@ class SQLiteConnector:
         # separate tables for many-to-many relationships
         SCHEMA_item_genres = """
             CREATE TABLE IF NOT EXISTS item_genres (
+                uuid INTEGER PRIMARY KEY AUTOINCREMENT,
                 item_id TEXT,
                 genre_id INTEGER,
                 genre_name TEXT,
-                PRIMARY KEY (item_id, genre_id),
                 FOREIGN KEY (item_id) REFERENCES library_items(item_id)
             )
         """
@@ -840,10 +841,11 @@ class SQLiteConnector:
 # -------------------------------------------
 
 
-    def ingest_all_library_items(self, emby_items_iterable) -> bool:
+    def ingest_all_library_items(self, emby_items_iterable, get_item_metadata: Optional[Callable[[str], dict]] = None) -> bool:
         """
         Ingest EVERY Movie/Episode from Emby into library_items (+ genres/tags + provider ids).
         emby_items_iterable should yield BaseItemDto dicts (see EmbyConnector.iter_all_items()).
+        Optionally provide get_item_metadata(item_id: str) to enable series-level genre fallback for Episodes.
         """
         if self._connection is None or self._cursor is None:
             print("[SQLiteConnector] ERROR: DB not connected", file=sys.stderr)
@@ -880,6 +882,27 @@ class SQLiteConnector:
         """
 
         cur = self._cursor
+
+        # Preload TMDB genre name->id maps for fast lookup
+        movie_genre_map: Dict[str, int] = {}
+        tv_genre_map: Dict[str, int] = {}
+        try:
+            for gid, gname in cur.execute("SELECT id, name FROM tmdb_movie_genres"):
+                movie_genre_map[str(gname).lower()] = int(gid)
+        except sqlite3.Error:
+            movie_genre_map = {}
+        try:
+            for gid, gname in cur.execute("SELECT id, name FROM tmdb_tv_genres"):
+                tv_genre_map[str(gname).lower()] = int(gid)
+        except sqlite3.Error:
+            tv_genre_map = {}
+
+        def _stable_id_from_name(name: str) -> int:
+            # Deterministic non-negative id from name
+            return int(zlib.crc32(name.lower().encode("utf-8")) & 0x7FFFFFFF)
+
+        # Cache for series metadata lookups to avoid repeated API calls
+        series_meta_cache: Dict[str, dict] = {}
         try:
             self._connection.execute("BEGIN")
             batch = 0
@@ -920,13 +943,78 @@ class SQLiteConnector:
                     )
                 )
 
-                # genres
-                for g in item.get("GenreItems", []):
-                    cur.execute(upsert_genre_sql, (item_id, g.get("Id"), g.get("Name")))
+                # genres (prefer object form; fallback to name list and TMDB mapping)
+                added_genre_names = set()
+                for g in item.get("GenreItems", []) or []:
+                    gname = g.get("Name")
+                    gid = g.get("Id")
+                    if gname:
+                        added_genre_names.add(gname)
+                    cur.execute(upsert_genre_sql, (item_id, gid, gname))
+
+                # Fallback to simple string list if present and not already added
+                for gname in item.get("Genres", []) or []:
+                    if not gname or gname in added_genre_names:
+                        continue
+                    key = gname.lower()
+                    itype = item.get("Type")
+                    # Choose appropriate TMDB map by item type; fallback to other if needed
+                    gid = None
+                    if itype == "Movie":
+                        gid = movie_genre_map.get(key) or tv_genre_map.get(key)
+                    elif itype == "Episode":
+                        gid = tv_genre_map.get(key) or movie_genre_map.get(key)
+                    else:
+                        gid = movie_genre_map.get(key) or tv_genre_map.get(key)
+                    if gid is None:
+                        gid = _stable_id_from_name(gname)
+                    cur.execute(upsert_genre_sql, (item_id, gid, gname))
+                    added_genre_names.add(gname)
+
+                # If still no genres on an Episode, fall back to its Series metadata
+                if not added_genre_names and (item.get("Type") == "Episode") and get_item_metadata:
+                    series_id = item.get("SeriesId")
+                    if series_id:
+                        sid = str(series_id)
+                        series_meta = series_meta_cache.get(sid)
+                        if series_meta is None:
+                            try:
+                                series_meta = get_item_metadata(sid) or {}
+                            except Exception as _e:
+                                series_meta = {}
+                            series_meta_cache[sid] = series_meta
+
+                        # Use Series GenreItems if available
+                        for g in series_meta.get("GenreItems", []) or []:
+                            gname = g.get("Name")
+                            gid = g.get("Id")
+                            if gname and gname not in added_genre_names:
+                                cur.execute(upsert_genre_sql, (item_id, gid, gname))
+                                added_genre_names.add(gname)
+
+                        # Fallback to Series Genres (names)
+                        for gname in series_meta.get("Genres", []) or []:
+                            if not gname or gname in added_genre_names:
+                                continue
+                            key = gname.lower()
+                            gid = tv_genre_map.get(key) or movie_genre_map.get(key) or _stable_id_from_name(gname)
+                            cur.execute(upsert_genre_sql, (item_id, gid, gname))
+                            added_genre_names.add(gname)
 
                 # tags
-                for t in item.get("TagItems", []):
-                    cur.execute(upsert_tag_sql, (item_id, t.get("Id"), t.get("Name")))
+                added_tag_names = set()
+                for t in item.get("TagItems", []) or []:
+                    tname = t.get("Name")
+                    tid = t.get("Id")
+                    if tname:
+                        added_tag_names.add(tname)
+                    cur.execute(upsert_tag_sql, (item_id, tid, tname))
+                for tname in item.get("Tags", []) or []:
+                    if not tname or tname in added_tag_names:
+                        continue
+                    tid = _stable_id_from_name(tname)
+                    cur.execute(upsert_tag_sql, (item_id, tid, tname))
+                    added_tag_names.add(tname)
 
                 # ProviderIds (TMDB/IMDB/TVDB etc.)
                 for provider, pid in (item.get("ProviderIds") or {}).items():
@@ -971,29 +1059,17 @@ class SQLiteConnector:
             print("[SQLiteConnector] ERROR: DB not connected", file=sys.stderr)
             return False
         
-        # CREATE TABLE IF NOT EXISTS watch_hist_raw_events(
-        #         row_id INTEGER PRIMARY KEY AUTOINCREMENT, 
-        #         date TEXT NOT NULL, 
-        #         time TEXT NOT NULL, 
-        #         user_id TEXT NOT NULL,
-        #         item_name TEXT NOT NULL,
-        #         item_id TEXT NOT NULL,
-        #         item_type TEXT NOT NULL,
-        #         duration INTEGER NOT NULL,
-        #         remote_address TEXT,
-        #         user_name TEXT NOT NULL
-        
         movie_genres_schema = """
             CREATE TABLE IF NOT EXISTS tmdb_movie_genres(
-                genre_id INTEGER PRIMARY KEY UNIQUE NOT NULL,
-                genre_string TEXT UNIQUE NOT NULL
+                id INTEGER PRIMARY KEY UNIQUE NOT NULL,
+                name TEXT UNIQUE NOT NULL
             )
         """
         
         tv_genres_schema = """
             CREATE TABLE IF NOT EXISTS tmdb_tv_genres(
-                genre_id INTEGER PRIMARY KEY UNIQUE NOT NULL,
-                genre_string TEXT UNIQUE NOT NULL
+                id INTEGER PRIMARY KEY UNIQUE NOT NULL,
+                name TEXT UNIQUE NOT NULL
             )
         """
         
@@ -1010,17 +1086,22 @@ class SQLiteConnector:
             return False
         
         
-    def ingest_tmdb_movie_tv_genres(self, fetch_movie_genre_func: Callable[[], Dict[int, str]], fetch_tv_genre_func: Callable[[], Dict[int, str]]):
+    def ingest_tmdb_movie_tv_genres(self, fetch_movie_genre_func: Callable[[], T_TMDBGenres], fetch_tv_genre_func: Callable[[], T_TMDBGenres]):
         """Fetch ALL the genres for BOTH movies and tv shows from TMDB, then ingest them into their appropriate tables"""
+        if self._connection is None or self._cursor is None:
+            print("[SQLiteConnector] ERROR: DB not connected", file=sys.stderr)
+            return False
         
-        movie_genres_data = fetch_movie_genre_func
-        tv_genres_data = fetch_tv_genre_func
-        
-        upsert_movie_genres = """
-        INSERT OR REPLACE INTO tmdb_movie_genres(
-            item_id, item_name, item_type,
-            series_name, series_id, season_number, episode_number,
-            runtime_ticks, premiere_date, overview, community_rating, production_year,
-            file_path, container, video_codec, resolution_width, resolution_height
-        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-        """
+        try:
+            for genre in fetch_movie_genre_func():
+                self._cursor.execute("INSERT OR REPLACE INTO tmdb_movie_genres(id, name) VALUES(?,?)", (genre["id"], genre["name"]))
+            for genre in fetch_tv_genre_func():
+                self._cursor.execute("INSERT OR REPLACE INTO tmdb_tv_genres(id, name) VALUES(?,?)", (genre["id"], genre["name"]))
+            
+            self._connection.commit()
+            
+            if self._debug: print("Successfully ingested genres into TMDB tables!")
+            
+        except sqlite3.Error as e:
+            if self._debug: print(f"[SQLiteConnector] ERROR: Failed to ingest TMDB genres: {e}", file=sys.stderr)
+            return False

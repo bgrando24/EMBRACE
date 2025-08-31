@@ -26,3 +26,6 @@ class T_EmbyUser(TypedDict):
 class T_EmbyUsersResponse(TypedDict):
     """Shortened response from /Users/Query endpoint"""
     Items: List[T_EmbyUser]
+    
+T_TMDBGenre = TypedDict("T_TMDBGenre", {"id": int, "name": str})
+T_TMDBGenres = list[T_TMDBGenre]

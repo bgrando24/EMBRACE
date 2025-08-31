@@ -1,3 +1,4 @@
+from itertools import islice
 import sqlite3
 import sys
 from typing import Optional, Final
@@ -53,6 +54,51 @@ class SQLiteConnector:
         self._cursor = self._connection.cursor()
         return True
     
+    def _extract_video_codec(self, item_data: dict) -> str:
+        """
+        Extract video codec from MediaStreams
+        """
+        for stream in item_data.get('MediaStreams', []):
+            if stream.get('Type') == 'Video':
+                return stream.get('Codec', '')
+        return ''
+    
+    def prune_missing_items(self, current_ids: set[str]) -> int:
+        """
+        Delete library rows not in current_ids. Returns rows deleted, or -1 if error. 
+        """
+        if self._connection is None or self._cursor is None:
+            print("[SQLiteConnector] ERROR: DB not connected", file=sys.stderr)
+            return -1
+
+        # Coerce to str to avoid int-vs-str mismatches
+        current_ids = {str(i) for i in current_ids}
+
+        self._connection.execute("BEGIN")
+        self._cursor.execute("SELECT item_id FROM library_items")
+        existing = {str(row[0]) for row in self._cursor.fetchall()}
+
+        to_delete = existing - current_ids
+        if to_delete:
+            # Optional: chunk to avoid huge parameter lists
+            def chunks(iterable, size=500):
+                it = iter(iterable)
+                while True:
+                    batch = list(islice(it, size))
+                    if not batch:
+                        break
+                    yield batch
+
+            for batch in chunks(to_delete, 500):
+                self._cursor.executemany("DELETE FROM item_provider_ids WHERE item_id = ?", [(i,) for i in batch])
+                self._cursor.executemany("DELETE FROM item_genres       WHERE item_id = ?", [(i,) for i in batch])
+                self._cursor.executemany("DELETE FROM item_tags         WHERE item_id = ?", [(i,) for i in batch])
+                self._cursor.executemany("DELETE FROM library_items     WHERE item_id = ?", [(i,) for i in batch])
+
+        self._connection.commit()
+        return len(to_delete)
+
+    
     
     # ================================== Setup methods ==================================
 
@@ -88,7 +134,7 @@ class SQLiteConnector:
                 time TEXT NOT NULL, 
                 user_id TEXT NOT NULL,
                 item_name TEXT NOT NULL,
-                item_id INTEGER NOT NULL,
+                item_id TEXT NOT NULL,
                 item_type TEXT NOT NULL,
                 duration INTEGER NOT NULL,
                 remote_address TEXT,
@@ -100,50 +146,48 @@ class SQLiteConnector:
             CREATE TABLE IF NOT EXISTS watch_hist_agg_sessions(
                 session_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id TEXT NOT NULL,
-                item_id INTEGER NOT NULL,
-                item_name TEXT NOT NULL,
-                item_type TEXT NOT NULL,
+                item_id TEXT NOT NULL,
                 session_start_timestamp TEXT NOT NULL,
                 session_end_timestamp TEXT NOT NULL,
-                session_duration_minutes INTEGER,
+                session_span_minutes INTEGER,
                 total_seconds_watched INTEGER NOT NULL,
                 session_count INTEGER NOT NULL,
                 completion_ratio REAL,
                 outcome TEXT,
                 created_timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(user_id, item_id, session_start_timestamp)
+                UNIQUE(user_id, item_id, session_start_timestamp),
+                FOREIGN KEY (item_id) REFERENCES library_items(item_id)
             )
         """
         
         #TABLE: watch_hist_user_item_stats
         SCHEMA_watch_hist_user_item_stats = """
             CREATE TABLE IF NOT EXISTS watch_hist_user_item_stats (
-            stat_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT NOT NULL,
-            item_id INTEGER NOT NULL,
-            item_name TEXT NOT NULL,
-            item_type TEXT NOT NULL,
-            total_sessions INTEGER NOT NULL DEFAULT 0,
-            total_seconds_watched INTEGER NOT NULL DEFAULT 0,
-            total_minutes_watched REAL GENERATED ALWAYS AS (total_seconds_watched / 60.0),
-            best_completion_ratio REAL DEFAULT 0,
-            average_completion_ratio REAL DEFAULT 0,
-            rewatch_count INTEGER DEFAULT 0,
-            first_watched_timestamp TEXT,
-            last_watched_timestamp TEXT,
-            days_between_first_last INTEGER GENERATED ALWAYS AS (
-                CASE 
-                    WHEN first_watched_timestamp = last_watched_timestamp THEN 0
-                    ELSE JULIANDAY(last_watched_timestamp) - JULIANDAY(first_watched_timestamp)
-                END
-            ),
-            adherence_score REAL DEFAULT 0,
-            completed_sessions INTEGER DEFAULT 0,
-            partial_sessions INTEGER DEFAULT 0,
-            abandoned_sessions INTEGER DEFAULT 0,
-            sampled_sessions INTEGER DEFAULT 0,
-            last_updated_timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(user_id, item_id)
+                stat_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                item_id TEXT NOT NULL,
+                total_sessions INTEGER NOT NULL DEFAULT 0,
+                total_seconds_watched INTEGER NOT NULL DEFAULT 0,
+                total_minutes_watched REAL GENERATED ALWAYS AS (total_seconds_watched / 60.0),
+                best_completion_ratio REAL DEFAULT 0,
+                average_completion_ratio REAL DEFAULT 0,
+                rewatch_count INTEGER DEFAULT 0,
+                first_watched_timestamp TEXT,
+                last_watched_timestamp TEXT,
+                days_between_first_last INTEGER GENERATED ALWAYS AS (
+                    CASE 
+                        WHEN first_watched_timestamp = last_watched_timestamp THEN 0
+                        ELSE JULIANDAY(last_watched_timestamp) - JULIANDAY(first_watched_timestamp)
+                    END
+                ),
+                adherence_score REAL DEFAULT 0,
+                completed_sessions INTEGER DEFAULT 0,
+                partial_sessions INTEGER DEFAULT 0,
+                abandoned_sessions INTEGER DEFAULT 0,
+                sampled_sessions INTEGER DEFAULT 0,
+                last_updated_timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, item_id),
+                FOREIGN KEY (item_id) REFERENCES library_items(item_id)
             )
         """
         try:
@@ -160,13 +204,121 @@ class SQLiteConnector:
             self._connection.commit()
             
             if self._debug: print("[SQLiteConnector] Watch history schemas created successfully!")
-            return True
             
         except sqlite3.Error as e:
-            if self._debug: print(f"[SQLiteConnector] ERROR: Failed to create user watch history schemas schema: {e}", file=sys.stderr)
+            if self._debug: print(f"[SQLiteConnector] ERROR: Failed to create user watch history schemas: {e}", file=sys.stderr)
             return False    
-# -----------------------
-    
+        
+        return True
+# ----------------------------------
+
+    def _INIT_create_library_items_schema(self) -> bool:
+        """
+        Creates the library_items table for movie/episode metadata
+        """
+        
+        if self._connection is None:
+            if self._debug: print(f"[SQliteConnector] ERROR: Database connection not found when attempting to create schema!", file=sys.stderr)
+            return False
+        if self._cursor is None:
+            if self._debug: print(f"[SQliteConnector] ERROR: Database cursor not found when attempting to create schema!", file=sys.stderr)
+            return False
+        
+        SCHEMA_library_items = """
+            CREATE TABLE IF NOT EXISTS library_items (
+                item_id TEXT PRIMARY KEY,
+                item_name TEXT NOT NULL,
+                item_type TEXT NOT NULL,  -- 'Episode' or 'Movie'
+                
+                -- Episode-specific fields
+                series_name TEXT,
+                series_id INTEGER,
+                season_number INTEGER,
+                episode_number INTEGER,
+                
+                -- Runtime and dates
+                runtime_ticks BIGINT,  -- Emby uses ticks (10,000,000 = 1 second)
+                runtime_seconds INTEGER GENERATED ALWAYS AS (runtime_ticks / 10000000),
+                runtime_minutes REAL GENERATED ALWAYS AS (runtime_ticks / 600000000.0),
+                premiere_date TEXT,
+                date_created TEXT,
+                
+                -- Content metadata
+                overview TEXT,
+                community_rating REAL,
+                production_year INTEGER,
+                
+                -- File info
+                file_path TEXT,
+                container TEXT,
+                video_codec TEXT,
+                resolution_width INTEGER,
+                resolution_height INTEGER,
+                
+                -- Timestamps
+                last_updated TEXT DEFAULT CURRENT_TIMESTAMP,
+                
+                UNIQUE(item_id)
+            )
+        """
+        
+        # separate tables for many-to-many relationships
+        SCHEMA_item_genres = """
+            CREATE TABLE IF NOT EXISTS item_genres (
+                item_id TEXT,
+                genre_id INTEGER,
+                genre_name TEXT,
+                PRIMARY KEY (item_id, genre_id),
+                FOREIGN KEY (item_id) REFERENCES library_items(item_id)
+            )
+        """
+        
+        SCHEMA_item_tags = """
+            CREATE TABLE IF NOT EXISTS item_tags (
+                item_id TEXT,
+                tag_id INTEGER,
+                tag_name TEXT,
+                PRIMARY KEY (item_id, tag_id),
+                FOREIGN KEY (item_id) REFERENCES library_items(item_id)
+            )
+        """
+        
+        # will be used later
+        # SCHEMA_item_metadata = """
+        # CREATE TABLE IF NOT EXISTS item_enriched_metadata (
+        #     item_id TEXT PRIMARY KEY,
+        #     content_tags TEXT,  -- JSON array of detailed tags
+        #     themes TEXT,        -- JSON array of themes
+        #     style_attributes TEXT,  -- JSON array of style descriptors
+        #     embedding BLOB,     -- Vector embedding for similarity
+        #     metadata_source TEXT,  -- 'tmdb', 'manual', 'llm_generated', etc.
+        #     last_updated TEXT DEFAULT CURRENT_TIMESTAMP,
+        #     FOREIGN KEY (item_id) REFERENCES library_items(item_id)
+        # )
+        # """
+        
+        try:
+            self._cursor.execute(SCHEMA_library_items)
+            self._cursor.execute(SCHEMA_item_genres)
+            self._cursor.execute(SCHEMA_item_tags)
+            
+            # indexes
+            self._cursor.execute("CREATE INDEX IF NOT EXISTS idx_library_series ON library_items(series_id)")
+            self._cursor.execute("CREATE INDEX IF NOT EXISTS idx_library_type ON library_items(item_type)")
+            self._cursor.execute("CREATE INDEX IF NOT EXISTS idx_series_season_ep ON library_items(series_id, season_number, episode_number)")
+            self._cursor.execute("CREATE INDEX IF NOT EXISTS idx_library_name ON library_items(item_name)")
+            self._cursor.execute("CREATE INDEX IF NOT EXISTS idx_library_year ON library_items(production_year)")
+            self._cursor.execute("CREATE INDEX IF NOT EXISTS idx_genres_item ON item_genres(item_id)")
+            self._cursor.execute("CREATE INDEX IF NOT EXISTS idx_tags_item ON item_tags(item_id)")
+            
+        except sqlite3.Error as e:
+            if self._debug: print(f"[SQLiteConnector] ERROR: Failed to create library item schemas: {e}", file=sys.stderr)
+            return False 
+        
+        return True
+# ----------------------------------
+
+
     def _INIT_DROP_user_watch_hist_schemas(self) -> bool:
         """
         **DROP** all user watch history tables
@@ -343,94 +495,91 @@ class SQLiteConnector:
             # 3. session_groups: Assigns a session group ID to each event by cumulatively summing new session markers
             # 4. Final SELECT: Aggregates events by session group, calculating session start/end, duration, total watch time, and outcome
             session_query = f"""
-            INSERT INTO watch_hist_agg_sessions 
-            (user_id, item_id, item_name, item_type, session_start_timestamp, 
-            session_end_timestamp, session_duration_minutes, total_seconds_watched, 
-            session_count, completion_ratio, outcome)
-            WITH ordered_events AS (
-                -- First, get all events with proper datetime formatting
+                INSERT INTO watch_hist_agg_sessions 
+                (user_id, item_id, session_start_timestamp, 
+                session_end_timestamp, session_span_minutes, total_seconds_watched, 
+                session_count, completion_ratio, outcome)
+                WITH ordered_events AS (
+                    -- First, get all events with proper datetime formatting
+                    SELECT 
+                        user_id,
+                        item_id,
+                        item_type,
+                        datetime(date || ' ' || time) as event_timestamp,
+                        duration,
+                        row_id
+                    FROM watch_hist_raw_events
+                    ORDER BY user_id, item_id, date, time
+                ),
+                session_boundaries AS (
+                    -- Identify session boundaries using LAG window function
+                    SELECT 
+                        *,
+                        LAG(event_timestamp) OVER (
+                            PARTITION BY user_id, item_id 
+                            ORDER BY event_timestamp
+                        ) as prev_event_timestamp,
+                        -- Check if gap from previous event > session_segment_minutes
+                        CASE 
+                            WHEN LAG(event_timestamp) OVER (
+                                PARTITION BY user_id, item_id 
+                                ORDER BY event_timestamp
+                            ) IS NULL THEN 1  -- First event is always new session
+                            WHEN julianday(event_timestamp) - julianday(
+                                LAG(event_timestamp) OVER (
+                                    PARTITION BY user_id, item_id 
+                                    ORDER BY event_timestamp
+                                )
+                            ) > {session_gap_days} THEN 1  -- Gap > threshold means new session
+                            ELSE 0
+                        END as is_new_session
+                    FROM ordered_events
+                ),
+                session_groups AS (
+                    -- Assign session IDs using cumulative sum of new session markers
+                    SELECT 
+                        *,
+                        SUM(is_new_session) OVER (
+                            PARTITION BY user_id, item_id 
+                            ORDER BY event_timestamp
+                            ROWS UNBOUNDED PRECEDING
+                        ) as session_group_id
+                    FROM session_boundaries
+                )
+                -- Final aggregation by session
                 SELECT 
                     user_id,
                     item_id,
-                    item_name,
-                    item_type,
-                    datetime(date || ' ' || time) as event_timestamp,
-                    duration,
-                    row_id
-                FROM watch_hist_raw_events
-                ORDER BY user_id, item_id, date, time
-            ),
-            session_boundaries AS (
-                -- Identify session boundaries using LAG window function
-                SELECT 
-                    *,
-                    LAG(event_timestamp) OVER (
-                        PARTITION BY user_id, item_id 
-                        ORDER BY event_timestamp
-                    ) as prev_event_timestamp,
-                    -- Check if gap from previous event > session_segment_minutes
+                    MIN(event_timestamp) as session_start_timestamp,
+                    MAX(event_timestamp) as session_end_timestamp,
+                    CAST(
+                        (julianday(MAX(event_timestamp)) - julianday(MIN(event_timestamp))) * 1440 
+                        AS INTEGER
+                    ) as session_span_minutes,
+                    SUM(duration) as total_seconds_watched,
+                    COUNT(*) as session_count,
+                    NULL as completion_ratio,  -- Will calculate later when we have item runtime data
+                    -- Determine outcome based on total watch time
                     CASE 
-                        WHEN LAG(event_timestamp) OVER (
-                            PARTITION BY user_id, item_id 
-                            ORDER BY event_timestamp
-                        ) IS NULL THEN 1  -- First event is always new session
-                        WHEN julianday(event_timestamp) - julianday(
-                            LAG(event_timestamp) OVER (
-                                PARTITION BY user_id, item_id 
-                                ORDER BY event_timestamp
-                            )
-                        ) > {session_gap_days} THEN 1  -- Gap > threshold means new session
-                        ELSE 0
-                    END as is_new_session
-                FROM ordered_events
-            ),
-            session_groups AS (
-                -- Assign session IDs using cumulative sum of new session markers
-                SELECT 
-                    *,
-                    SUM(is_new_session) OVER (
-                        PARTITION BY user_id, item_id 
-                        ORDER BY event_timestamp
-                        ROWS UNBOUNDED PRECEDING
-                    ) as session_group_id
-                FROM session_boundaries
-            )
-            -- Final aggregation by session
-            SELECT 
-                user_id,
-                item_id,
-                MAX(item_name) as item_name,  -- Should be same for all in group
-                MAX(item_type) as item_type,
-                MIN(event_timestamp) as session_start_timestamp,
-                MAX(event_timestamp) as session_end_timestamp,
-                CAST(
-                    (julianday(MAX(event_timestamp)) - julianday(MIN(event_timestamp))) * 1440 
-                    AS INTEGER
-                ) as session_duration_minutes,
-                SUM(duration) as total_seconds_watched,
-                COUNT(*) as session_count,
-                NULL as completion_ratio,  -- Will calculate later when we have item runtime data
-                -- Determine outcome based on total watch time
-                CASE 
-                    WHEN MAX(item_type) = 'Episode' THEN
-                        CASE
-                            WHEN SUM(duration) >= 1200 THEN 'completed'  -- 20+ min for episodes
-                            WHEN SUM(duration) >= 300 THEN 'partial'     -- 5-20 min
-                            WHEN SUM(duration) >= 60 THEN 'sampled'      -- 1-5 min
-                            ELSE 'abandoned'                              -- <1 min
-                        END
-                    WHEN MAX(item_type) = 'Movie' THEN
-                        CASE
-                            WHEN SUM(duration) >= 5400 THEN 'completed'  -- 90+ min for movies
-                            WHEN SUM(duration) >= 1800 THEN 'partial'    -- 30-90 min
-                            WHEN SUM(duration) >= 300 THEN 'sampled'     -- 5-30 min
-                            ELSE 'abandoned'                              -- <5 min
-                        END
-                    ELSE 'unknown'
-                END as outcome
-            FROM session_groups
-            GROUP BY user_id, item_id, session_group_id
-            ORDER BY user_id, item_id, MIN(event_timestamp)
+                        WHEN MAX(item_type) = 'Episode' THEN
+                            CASE
+                                WHEN SUM(duration) >= 1200 THEN 'completed'  -- 20+ min for episodes
+                                WHEN SUM(duration) >= 300 THEN 'partial'     -- 5-20 min
+                                WHEN SUM(duration) >= 60 THEN 'sampled'      -- 1-5 min
+                                ELSE 'abandoned'                              -- <1 min
+                            END
+                        WHEN MAX(item_type) = 'Movie' THEN
+                            CASE
+                                WHEN SUM(duration) >= 5400 THEN 'completed'  -- 90+ min for movies
+                                WHEN SUM(duration) >= 1800 THEN 'partial'    -- 30-90 min
+                                WHEN SUM(duration) >= 300 THEN 'sampled'     -- 5-30 min
+                                ELSE 'abandoned'                              -- <5 min
+                            END
+                        ELSE 'unknown'
+                    END as outcome
+                FROM session_groups
+                GROUP BY user_id, item_id, session_group_id
+                ORDER BY user_id, item_id, MIN(event_timestamp)
             """
             
             # Execute the session aggregation
@@ -447,7 +596,7 @@ class SQLiteConnector:
                         COUNT(DISTINCT user_id) as unique_users,
                         COUNT(DISTINCT item_id) as unique_items,
                         COUNT(*) as total_sessions,
-                        AVG(session_duration_minutes) as avg_session_minutes,
+                        AVG(session_span_minutes) as avg_session_minutes,
                         AVG(total_seconds_watched/60.0) as avg_watch_minutes
                     FROM watch_hist_agg_sessions
                 """)
@@ -476,3 +625,268 @@ class SQLiteConnector:
             return False 
 
         return True
+# -----------------------
+
+
+    def _INIT_POPULATE_watch_hist_user_item_stats(self) -> bool:
+        """
+        **WARNING: THIS WILL FIRST DROP ALL DATA IN THE `watch_hist_user_item_stats` TABLE**
+        
+        Populates the user-item statistics table by aggregating data from watch_hist_agg_sessions.
+        """
+        
+        if self._connection is None:
+            if self._debug: print(f"[SQliteConnector] ERROR: Database connection not found!", file=sys.stderr)
+            return False
+        if self._cursor is None:
+            if self._debug: print(f"[SQliteConnector] ERROR: Database cursor not found!", file=sys.stderr)
+            return False
+        
+        try:
+            # clear out table
+            self._cursor.execute("DROP TABLE IF EXISTS watch_hist_user_item_stats")
+            self._INIT_create_user_watch_hist_schemas()
+            
+            if self._debug:
+                print("[SQLiteConnector] Calculating user-item statistics from aggregated sessions")
+            
+            stats_query = """
+                INSERT INTO watch_hist_user_item_stats
+                (user_id, item_id, total_sessions, total_seconds_watched,
+                best_completion_ratio, average_completion_ratio,
+                rewatch_count, first_watched_timestamp, last_watched_timestamp,
+                adherence_score, completed_sessions, partial_sessions, 
+                abandoned_sessions, sampled_sessions)
+                SELECT 
+                    s.user_id,
+                    s.item_id,
+                    COUNT(*) as total_sessions,
+                    SUM(s.total_seconds_watched) as total_seconds,
+                    -- Use actual runtime from library_items when available
+                    CASE
+                        WHEN l.runtime_seconds > 0 THEN
+                            MIN(1.0, MAX(s.total_seconds_watched) / CAST(l.runtime_seconds AS REAL))
+                        WHEN l.item_type = 'Episode' THEN
+                            MIN(1.0, MAX(s.total_seconds_watched) / 1500.0)  -- Fallback 25 min
+                        WHEN l.item_type = 'Movie' THEN  
+                            MIN(1.0, MAX(s.total_seconds_watched) / 7200.0)  -- Fallback 2 hours
+                        ELSE 0
+                    END as best_completion,
+                    CASE
+                        WHEN l.runtime_seconds > 0 THEN
+                            MIN(1.0, AVG(s.total_seconds_watched) / CAST(l.runtime_seconds AS REAL))
+                        WHEN l.item_type = 'Episode' THEN
+                            MIN(1.0, AVG(s.total_seconds_watched) / 1500.0)
+                        WHEN l.item_type = 'Movie' THEN
+                            MIN(1.0, AVG(s.total_seconds_watched) / 7200.0)
+                        ELSE 0
+                    END as avg_completion,
+                    -- Rewatch count (sessions beyond the first)
+                    CASE 
+                        WHEN COUNT(*) > 1 THEN COUNT(*) - 1 
+                        ELSE 0 
+                    END as rewatches,
+                    MIN(s.session_start_timestamp) as first_watched,
+                    MAX(s.session_end_timestamp) as last_watched,
+                    -- Adherence score using actual runtime when available
+                    CASE
+                        WHEN l.runtime_seconds > 0 THEN
+                            (0.6 * MIN(1.0, MAX(s.total_seconds_watched) / CAST(l.runtime_seconds AS REAL)) +
+                            0.3 * MIN(1.0, COUNT(*) / 3.0) +
+                            0.1 * MIN(1.0, SUM(s.total_seconds_watched) / CAST(l.runtime_seconds AS REAL)))
+                        WHEN l.item_type = 'Episode' THEN
+                            (0.6 * MIN(1.0, MAX(s.total_seconds_watched) / 1500.0) +
+                            0.3 * MIN(1.0, COUNT(*) / 3.0) +
+                            0.1 * MIN(1.0, SUM(s.total_seconds_watched) / 3600.0))
+                        WHEN l.item_type = 'Movie' THEN
+                            (0.7 * MIN(1.0, MAX(s.total_seconds_watched) / 7200.0) +
+                            0.2 * MIN(1.0, COUNT(*) / 2.0) +
+                            0.1 * MIN(1.0, SUM(s.total_seconds_watched) / 7200.0))
+                        ELSE 0
+                    END as adherence,
+                    -- Session outcome counts
+                    SUM(CASE WHEN s.outcome = 'completed' THEN 1 ELSE 0 END) as completed,
+                    SUM(CASE WHEN s.outcome = 'partial' THEN 1 ELSE 0 END) as partial,
+                    SUM(CASE WHEN s.outcome = 'abandoned' THEN 1 ELSE 0 END) as abandoned,
+                    SUM(CASE WHEN s.outcome = 'sampled' THEN 1 ELSE 0 END) as sampled
+                FROM watch_hist_agg_sessions s
+                LEFT JOIN library_items l ON s.item_id = l.item_id
+                GROUP BY s.user_id, s.item_id
+            """
+            
+            self._cursor.execute(stats_query)
+            rows_inserted = self._cursor.rowcount
+            self._connection.commit()
+            
+            if self._debug:
+                print(f"[SQLiteConnector] Successfully created stats for {rows_inserted} user-item pairs")
+            
+        except sqlite3.Error as e:
+            if self._debug:
+                print(f"[SQLiteConnector] ERROR creating user-item stats: {e}", file=sys.stderr)
+            self._connection.rollback()
+            return False
+        
+        return True
+# -------------------------------------------
+
+    
+    def _ensure_provider_ids_schema(self):
+        sql = """
+        CREATE TABLE IF NOT EXISTS item_provider_ids(
+            item_id TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            provider_item_id TEXT NOT NULL,
+            PRIMARY KEY (item_id, provider),
+            FOREIGN KEY (item_id) REFERENCES library_items(item_id)
+        );
+        """
+        if self._connection is None or self._cursor is None:
+            if self._debug: print("[SQLiteConnector] ERROR: DB not connected", file=sys.stderr)
+            return False
+        
+        self._cursor.execute(sql)
+        self._cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_provider_provider ON item_provider_ids(provider)"
+        )
+# -------------------------------------------
+
+
+    def ingest_all_library_items(self, emby_items_iterable) -> bool:
+        """
+        Ingest EVERY Movie/Episode from Emby into library_items (+ genres/tags + provider ids).
+        emby_items_iterable should yield BaseItemDto dicts (see EmbyConnector.iter_all_items()).
+        """
+        if self._connection is None or self._cursor is None:
+            print("[SQLiteConnector] ERROR: DB not connected", file=sys.stderr)
+            return False
+
+        # Ensure schemas exist
+        if not self._INIT_create_library_items_schema():
+            return False
+        self._ensure_provider_ids_schema()  # see helper below
+
+        # Upserts
+        upsert_item_sql = """
+        INSERT OR REPLACE INTO library_items(
+            item_id, item_name, item_type,
+            series_name, series_id, season_number, episode_number,
+            runtime_ticks, premiere_date, overview, community_rating, production_year,
+            file_path, container, video_codec, resolution_width, resolution_height
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """
+
+        upsert_genre_sql = """
+        INSERT OR REPLACE INTO item_genres(item_id, genre_id, genre_name)
+        VALUES(?,?,?)
+        """
+
+        upsert_tag_sql = """
+        INSERT OR REPLACE INTO item_tags(item_id, tag_id, tag_name)
+        VALUES(?,?,?)
+        """
+
+        upsert_provider_sql = """
+        INSERT OR REPLACE INTO item_provider_ids(item_id, provider, provider_item_id)
+        VALUES(?,?,?)
+        """
+
+        cur = self._cursor
+        try:
+            self._connection.execute("BEGIN")
+            batch = 0
+            seen = set()    # for pruning items no longer in library
+
+            for item in emby_items_iterable:
+                item_id = str(item.get("Id"))
+                seen.add(item_id)
+                # Width/Height may come on item OR video stream; use item first, then fallback
+                width = item.get("Width")
+                height = item.get("Height")
+                if (width is None or height is None) and item.get("MediaStreams"):
+                    for s in item["MediaStreams"]:
+                        if s.get("Type") == "Video":
+                            width = width or s.get("Width")
+                            height = height or s.get("Height")
+                            break
+
+                cur.execute(
+                    upsert_item_sql,
+                    (
+                        item_id,
+                        item.get("Name"),
+                        item.get("Type"),
+                        item.get("SeriesName"),
+                        item.get("SeriesId"),
+                        item.get("ParentIndexNumber"),   # season number
+                        item.get("IndexNumber"),         # episode number
+                        item.get("RunTimeTicks"),
+                        item.get("PremiereDate"),
+                        item.get("Overview"),
+                        item.get("CommunityRating"),
+                        item.get("ProductionYear"),
+                        item.get("Path"),
+                        item.get("Container"),
+                        self._extract_video_codec(item),
+                        width, height
+                    )
+                )
+
+                # genres
+                for g in item.get("GenreItems", []):
+                    cur.execute(upsert_genre_sql, (item_id, g.get("Id"), g.get("Name")))
+
+                # tags
+                for t in item.get("TagItems", []):
+                    cur.execute(upsert_tag_sql, (item_id, t.get("Id"), t.get("Name")))
+
+                # ProviderIds (TMDB/IMDB/TVDB etc.)
+                for provider, pid in (item.get("ProviderIds") or {}).items():
+                    if pid:
+                        cur.execute(upsert_provider_sql, (item_id, provider, str(pid)))
+
+                batch += 1
+                if batch % 1000 == 0:
+                    self._connection.commit()
+                    self._connection.execute("BEGIN")
+
+            self._connection.commit()
+            
+            # prune after ingest
+            deleted = self.prune_missing_items(seen)
+            if self._debug: print(f"Pruned {deleted} items no longer in Emby.")
+            
+            return True
+
+        except sqlite3.Error as e:
+            print(f"[SQLiteConnector] ERROR ingesting library: {e}", file=sys.stderr)
+            self._connection.rollback()
+            return False
+# -------------------------------------------
+
+
+    def update_completion_ratios(self):
+        """
+        Update completion ratios in sessions table using actual runtime data
+        """
+        if self._connection is None:
+            if self._debug: print(f"[SQliteConnector] ERROR: Database connection not found!", file=sys.stderr)
+            return False
+        if self._cursor is None:
+            if self._debug: print(f"[SQliteConnector] ERROR: Database cursor not found!", file=sys.stderr)
+            return False
+        
+        self._cursor.execute("""
+            UPDATE watch_hist_agg_sessions
+            SET completion_ratio = 
+                MIN(1.0, CAST(total_seconds_watched AS REAL) / l.runtime_seconds)
+            FROM library_items l
+            WHERE watch_hist_agg_sessions.item_id = l.item_id
+            AND l.runtime_seconds > 0
+        """)
+        
+        self._connection.commit()
+        
+        if self._debug:
+            print("[SQLiteConnector] Updated completion ratios with actual runtime data")
+# -------------------------------------------

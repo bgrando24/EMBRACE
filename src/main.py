@@ -28,12 +28,14 @@ bgmd_hist = Emby.get_user_watch_hist(users["bgmd"], 10)
 # test db connection and watch history tables
 sqlite = SQLiteConnector(SQLITE_DB_NAME, debug=True)
 sqlite.connect_db()
-sqlite._INIT_POPULATE_watch_hist_raw_events(Emby.get_all_watch_hist)
-sqlite._INIT_POPULATE_watch_hist_agg_sessions()
-sqlite._INIT_POPULATE_watch_hist_user_item_stats()
+# Ingest library metadata first so runtime is available for later calculations
 sqlite._INIT_create_library_items_schema()
 ok = sqlite.ingest_all_library_items(Emby.iter_all_items())
 print("Ingest complete:", ok)
-sqlite.update_completion_ratios()
 
+# Now process watch history using actual runtimes
+sqlite._INIT_POPULATE_watch_hist_raw_events(Emby.get_all_watch_hist)
+sqlite._INIT_POPULATE_watch_hist_agg_sessions()
+sqlite._INIT_POPULATE_watch_hist_user_item_stats()
+sqlite.update_completion_ratios()
 

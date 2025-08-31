@@ -199,6 +199,7 @@ class SQLiteConnector:
             # indexes for each table
             self._cursor.execute("CREATE INDEX IF NOT EXISTS idx_watch_hist_raw_user_time ON watch_hist_raw_events(user_id, date, time DESC)")
             self._cursor.execute("CREATE INDEX IF NOT EXISTS idx_watch_hist_agg_sessions ON watch_hist_agg_sessions(user_id, session_end_timestamp DESC)")
+            self._cursor.execute("CREATE INDEX IF NOT EXISTS idx_watch_hist_agg_item ON watch_hist_agg_sessions(item_id)")
             self._cursor.execute("CREATE INDEX IF NOT EXISTS idx_watch_hist_user_item_stats ON watch_hist_user_item_stats(user_id, adherence_score DESC)")
             
             self._connection.commit()
@@ -232,7 +233,7 @@ class SQLiteConnector:
                 
                 -- Episode-specific fields
                 series_name TEXT,
-                series_id INTEGER,
+                series_id TEXT,
                 season_number INTEGER,
                 episode_number INTEGER,
                 
@@ -461,7 +462,13 @@ class SQLiteConnector:
 # -----------------------
 
 
-    def _INIT_POPULATE_watch_hist_agg_sessions(self, session_segment_minutes: int = 15) -> bool:
+    def _INIT_POPULATE_watch_hist_agg_sessions(
+        self,
+        session_segment_minutes: int = 15,
+        completed_ratio_threshold: float = 0.9,
+        partial_ratio_threshold: float = 0.25,
+        min_sampled_seconds: int = 60,
+    ) -> bool:
         """
         **WARNING: THIS WILL FIRST DROP ALL DATA IN THE `watch_hist_agg_sessions` TABLE**
         
@@ -488,6 +495,9 @@ class SQLiteConnector:
                 
             # convert session segment to fraction of a day for Julian day calculations: https://sqlite.org/lang_datefunc.html
             session_gap_days = session_segment_minutes / 1440.0  # 1440 minutes in a day
+            completed_t = float(completed_ratio_threshold)
+            partial_t = float(partial_ratio_threshold)
+            min_sample = int(min_sampled_seconds)
             
             # below query seems complex but here's a breakdown:
             # 1. ordered_events: Selects all raw events, formats timestamps, and orders them
@@ -558,9 +568,48 @@ class SQLiteConnector:
                     ) as session_span_minutes,
                     SUM(duration) as total_seconds_watched,
                     COUNT(*) as session_count,
-                    NULL as completion_ratio,  -- Will calculate later when we have item runtime data
-                    -- Determine outcome based on total watch time
+                    -- Compute completion ratio using actual runtime when available
                     CASE 
+                        WHEN (
+                            SELECT runtime_seconds 
+                            FROM library_items 
+                            WHERE item_id = session_groups.item_id
+                        ) > 0 THEN 
+                            MIN(
+                                1.0, 
+                                SUM(duration) / CAST((
+                                    SELECT runtime_seconds 
+                                    FROM library_items 
+                                    WHERE item_id = session_groups.item_id
+                                ) AS REAL)
+                            )
+                        WHEN MAX(item_type) = 'Episode' THEN 
+                            MIN(1.0, SUM(duration) / 1500.0)  -- Fallback 25 min
+                        WHEN MAX(item_type) = 'Movie' THEN   
+                            MIN(1.0, SUM(duration) / 7200.0)  -- Fallback 2 hours
+                        ELSE NULL
+                    END as completion_ratio,
+                    -- Determine outcome using actual runtime when available
+                    CASE 
+                        WHEN (
+                            SELECT runtime_seconds 
+                            FROM library_items 
+                            WHERE item_id = session_groups.item_id
+                        ) > 0 THEN 
+                            CASE
+                                WHEN SUM(duration) >= {completed_t} * (
+                                    SELECT runtime_seconds 
+                                    FROM library_items 
+                                    WHERE item_id = session_groups.item_id
+                                ) THEN 'completed'
+                                WHEN SUM(duration) >= {partial_t} * (
+                                    SELECT runtime_seconds 
+                                    FROM library_items 
+                                    WHERE item_id = session_groups.item_id
+                                ) THEN 'partial'
+                                WHEN SUM(duration) >= {min_sample} THEN 'sampled'
+                                ELSE 'abandoned'
+                            END
                         WHEN MAX(item_type) = 'Episode' THEN
                             CASE
                                 WHEN SUM(duration) >= 1200 THEN 'completed'  -- 20+ min for episodes
@@ -876,14 +925,25 @@ class SQLiteConnector:
             if self._debug: print(f"[SQliteConnector] ERROR: Database cursor not found!", file=sys.stderr)
             return False
         
-        self._cursor.execute("""
+        # SQLite-compatible correlated subquery (no UPDATE ... FROM support)
+        self._cursor.execute(
+            """
             UPDATE watch_hist_agg_sessions
-            SET completion_ratio = 
-                MIN(1.0, CAST(total_seconds_watched AS REAL) / l.runtime_seconds)
-            FROM library_items l
-            WHERE watch_hist_agg_sessions.item_id = l.item_id
-            AND l.runtime_seconds > 0
-        """)
+            SET completion_ratio = MIN(
+                1.0,
+                CAST(total_seconds_watched AS REAL) / (
+                    SELECT runtime_seconds 
+                    FROM library_items l
+                    WHERE l.item_id = watch_hist_agg_sessions.item_id
+                )
+            )
+            WHERE EXISTS (
+                SELECT 1 FROM library_items l
+                WHERE l.item_id = watch_hist_agg_sessions.item_id
+                AND l.runtime_seconds > 0
+            )
+            """
+        )
         
         self._connection.commit()
         

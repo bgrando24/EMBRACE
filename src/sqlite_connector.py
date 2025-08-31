@@ -100,7 +100,7 @@ class SQLiteConnector:
 
     
     
-    # ================================== Setup methods ==================================
+    # ====================================================================== User Watch History Tables ======================================================================
 
     def _INIT_create_user_watch_hist_schemas(self) -> bool:
         """
@@ -212,113 +212,6 @@ class SQLiteConnector:
         
         return True
 # ----------------------------------
-
-    def _INIT_create_library_items_schema(self) -> bool:
-        """
-        Creates the library_items table for movie/episode metadata
-        """
-        
-        if self._connection is None:
-            if self._debug: print(f"[SQliteConnector] ERROR: Database connection not found when attempting to create schema!", file=sys.stderr)
-            return False
-        if self._cursor is None:
-            if self._debug: print(f"[SQliteConnector] ERROR: Database cursor not found when attempting to create schema!", file=sys.stderr)
-            return False
-        
-        SCHEMA_library_items = """
-            CREATE TABLE IF NOT EXISTS library_items (
-                item_id TEXT PRIMARY KEY,
-                item_name TEXT NOT NULL,
-                item_type TEXT NOT NULL,  -- 'Episode' or 'Movie'
-                
-                -- Episode-specific fields
-                series_name TEXT,
-                series_id TEXT,
-                season_number INTEGER,
-                episode_number INTEGER,
-                
-                -- Runtime and dates
-                runtime_ticks BIGINT,  -- Emby uses ticks (10,000,000 = 1 second)
-                runtime_seconds INTEGER GENERATED ALWAYS AS (runtime_ticks / 10000000),
-                runtime_minutes REAL GENERATED ALWAYS AS (runtime_ticks / 600000000.0),
-                premiere_date TEXT,
-                date_created TEXT,
-                
-                -- Content metadata
-                overview TEXT,
-                community_rating REAL,
-                production_year INTEGER,
-                
-                -- File info
-                file_path TEXT,
-                container TEXT,
-                video_codec TEXT,
-                resolution_width INTEGER,
-                resolution_height INTEGER,
-                
-                -- Timestamps
-                last_updated TEXT DEFAULT CURRENT_TIMESTAMP,
-                
-                UNIQUE(item_id)
-            )
-        """
-        
-        # separate tables for many-to-many relationships
-        SCHEMA_item_genres = """
-            CREATE TABLE IF NOT EXISTS item_genres (
-                item_id TEXT,
-                genre_id INTEGER,
-                genre_name TEXT,
-                PRIMARY KEY (item_id, genre_id),
-                FOREIGN KEY (item_id) REFERENCES library_items(item_id)
-            )
-        """
-        
-        SCHEMA_item_tags = """
-            CREATE TABLE IF NOT EXISTS item_tags (
-                item_id TEXT,
-                tag_id INTEGER,
-                tag_name TEXT,
-                PRIMARY KEY (item_id, tag_id),
-                FOREIGN KEY (item_id) REFERENCES library_items(item_id)
-            )
-        """
-        
-        # will be used later
-        # SCHEMA_item_metadata = """
-        # CREATE TABLE IF NOT EXISTS item_enriched_metadata (
-        #     item_id TEXT PRIMARY KEY,
-        #     content_tags TEXT,  -- JSON array of detailed tags
-        #     themes TEXT,        -- JSON array of themes
-        #     style_attributes TEXT,  -- JSON array of style descriptors
-        #     embedding BLOB,     -- Vector embedding for similarity
-        #     metadata_source TEXT,  -- 'tmdb', 'manual', 'llm_generated', etc.
-        #     last_updated TEXT DEFAULT CURRENT_TIMESTAMP,
-        #     FOREIGN KEY (item_id) REFERENCES library_items(item_id)
-        # )
-        # """
-        
-        try:
-            self._cursor.execute(SCHEMA_library_items)
-            self._cursor.execute(SCHEMA_item_genres)
-            self._cursor.execute(SCHEMA_item_tags)
-            
-            # indexes
-            self._cursor.execute("CREATE INDEX IF NOT EXISTS idx_library_series ON library_items(series_id)")
-            self._cursor.execute("CREATE INDEX IF NOT EXISTS idx_library_type ON library_items(item_type)")
-            self._cursor.execute("CREATE INDEX IF NOT EXISTS idx_series_season_ep ON library_items(series_id, season_number, episode_number)")
-            self._cursor.execute("CREATE INDEX IF NOT EXISTS idx_library_name ON library_items(item_name)")
-            self._cursor.execute("CREATE INDEX IF NOT EXISTS idx_library_year ON library_items(production_year)")
-            self._cursor.execute("CREATE INDEX IF NOT EXISTS idx_genres_item ON item_genres(item_id)")
-            self._cursor.execute("CREATE INDEX IF NOT EXISTS idx_tags_item ON item_tags(item_id)")
-            
-        except sqlite3.Error as e:
-            if self._debug: print(f"[SQLiteConnector] ERROR: Failed to create library item schemas: {e}", file=sys.stderr)
-            return False 
-        
-        return True
-# ----------------------------------
-
 
     def _INIT_DROP_user_watch_hist_schemas(self) -> bool:
         """
@@ -780,6 +673,156 @@ class SQLiteConnector:
 # -------------------------------------------
 
     
+    def update_completion_ratios(self):
+        """
+        Update completion ratios in sessions table using actual runtime data
+        """
+        if self._connection is None:
+            if self._debug: print(f"[SQliteConnector] ERROR: Database connection not found!", file=sys.stderr)
+            return False
+        if self._cursor is None:
+            if self._debug: print(f"[SQliteConnector] ERROR: Database cursor not found!", file=sys.stderr)
+            return False
+        
+        # SQLite-compatible correlated subquery (no UPDATE ... FROM support)
+        self._cursor.execute(
+            """
+            UPDATE watch_hist_agg_sessions
+            SET completion_ratio = MIN(
+                1.0,
+                CAST(total_seconds_watched AS REAL) / (
+                    SELECT runtime_seconds 
+                    FROM library_items l
+                    WHERE l.item_id = watch_hist_agg_sessions.item_id
+                )
+            )
+            WHERE EXISTS (
+                SELECT 1 FROM library_items l
+                WHERE l.item_id = watch_hist_agg_sessions.item_id
+                AND l.runtime_seconds > 0
+            )
+            """
+        )
+        
+        self._connection.commit()
+        
+        if self._debug:
+            print("[SQLiteConnector] Updated completion ratios with actual runtime data")
+# -------------------------------------------
+    
+
+    # ====================================================================== Emby Library Tables ======================================================================
+
+    def _INIT_create_library_items_schema(self) -> bool:
+        """
+        Creates the library_items table for movie/episode metadata
+        """
+        
+        if self._connection is None:
+            if self._debug: print(f"[SQliteConnector] ERROR: Database connection not found when attempting to create schema!", file=sys.stderr)
+            return False
+        if self._cursor is None:
+            if self._debug: print(f"[SQliteConnector] ERROR: Database cursor not found when attempting to create schema!", file=sys.stderr)
+            return False
+        
+        SCHEMA_library_items = """
+            CREATE TABLE IF NOT EXISTS library_items (
+                item_id TEXT PRIMARY KEY,
+                item_name TEXT NOT NULL,
+                item_type TEXT NOT NULL,  -- 'Episode' or 'Movie'
+                
+                -- Episode-specific fields
+                series_name TEXT,
+                series_id TEXT,
+                season_number INTEGER,
+                episode_number INTEGER,
+                
+                -- Runtime and dates
+                runtime_ticks BIGINT,  -- Emby uses ticks (10,000,000 = 1 second)
+                runtime_seconds INTEGER GENERATED ALWAYS AS (runtime_ticks / 10000000),
+                runtime_minutes REAL GENERATED ALWAYS AS (runtime_ticks / 600000000.0),
+                premiere_date TEXT,
+                date_created TEXT,
+                
+                -- Content metadata
+                overview TEXT,
+                community_rating REAL,
+                production_year INTEGER,
+                
+                -- File info
+                file_path TEXT,
+                container TEXT,
+                video_codec TEXT,
+                resolution_width INTEGER,
+                resolution_height INTEGER,
+                
+                -- Timestamps
+                last_updated TEXT DEFAULT CURRENT_TIMESTAMP,
+                
+                UNIQUE(item_id)
+            )
+        """
+        
+        # separate tables for many-to-many relationships
+        SCHEMA_item_genres = """
+            CREATE TABLE IF NOT EXISTS item_genres (
+                item_id TEXT,
+                genre_id INTEGER,
+                genre_name TEXT,
+                PRIMARY KEY (item_id, genre_id),
+                FOREIGN KEY (item_id) REFERENCES library_items(item_id)
+            )
+        """
+        
+        SCHEMA_item_tags = """
+            CREATE TABLE IF NOT EXISTS item_tags (
+                item_id TEXT,
+                tag_id INTEGER,
+                tag_name TEXT,
+                PRIMARY KEY (item_id, tag_id),
+                FOREIGN KEY (item_id) REFERENCES library_items(item_id)
+            )
+        """
+        
+        # will be used later
+        # SCHEMA_item_metadata = """
+        # CREATE TABLE IF NOT EXISTS item_enriched_metadata (
+        #     item_id TEXT PRIMARY KEY,
+        #     content_tags TEXT,  -- JSON array of detailed tags
+        #     themes TEXT,        -- JSON array of themes
+        #     style_attributes TEXT,  -- JSON array of style descriptors
+        #     embedding BLOB,     -- Vector embedding for similarity
+        #     metadata_source TEXT,  -- 'tmdb', 'manual', 'llm_generated', etc.
+        #     last_updated TEXT DEFAULT CURRENT_TIMESTAMP,
+        #     FOREIGN KEY (item_id) REFERENCES library_items(item_id)
+        # )
+        # """
+        
+        try:
+            self._cursor.execute(SCHEMA_library_items)
+            self._cursor.execute(SCHEMA_item_genres)
+            self._cursor.execute(SCHEMA_item_tags)
+            
+            # indexes
+            self._cursor.execute("CREATE INDEX IF NOT EXISTS idx_library_series ON library_items(series_id)")
+            self._cursor.execute("CREATE INDEX IF NOT EXISTS idx_library_type ON library_items(item_type)")
+            self._cursor.execute("CREATE INDEX IF NOT EXISTS idx_series_season_ep ON library_items(series_id, season_number, episode_number)")
+            self._cursor.execute("CREATE INDEX IF NOT EXISTS idx_library_name ON library_items(item_name)")
+            self._cursor.execute("CREATE INDEX IF NOT EXISTS idx_library_year ON library_items(production_year)")
+            self._cursor.execute("CREATE INDEX IF NOT EXISTS idx_genres_item ON item_genres(item_id)")
+            self._cursor.execute("CREATE INDEX IF NOT EXISTS idx_tags_item ON item_tags(item_id)")
+            
+        except sqlite3.Error as e:
+            if self._debug: print(f"[SQLiteConnector] ERROR: Failed to create library item schemas: {e}", file=sys.stderr)
+            return False 
+        
+        return True
+# ----------------------------------
+
+
+    
+
+    
     def _ensure_provider_ids_schema(self):
         sql = """
         CREATE TABLE IF NOT EXISTS item_provider_ids(
@@ -914,39 +957,4 @@ class SQLiteConnector:
 # -------------------------------------------
 
 
-    def update_completion_ratios(self):
-        """
-        Update completion ratios in sessions table using actual runtime data
-        """
-        if self._connection is None:
-            if self._debug: print(f"[SQliteConnector] ERROR: Database connection not found!", file=sys.stderr)
-            return False
-        if self._cursor is None:
-            if self._debug: print(f"[SQliteConnector] ERROR: Database cursor not found!", file=sys.stderr)
-            return False
-        
-        # SQLite-compatible correlated subquery (no UPDATE ... FROM support)
-        self._cursor.execute(
-            """
-            UPDATE watch_hist_agg_sessions
-            SET completion_ratio = MIN(
-                1.0,
-                CAST(total_seconds_watched AS REAL) / (
-                    SELECT runtime_seconds 
-                    FROM library_items l
-                    WHERE l.item_id = watch_hist_agg_sessions.item_id
-                )
-            )
-            WHERE EXISTS (
-                SELECT 1 FROM library_items l
-                WHERE l.item_id = watch_hist_agg_sessions.item_id
-                AND l.runtime_seconds > 0
-            )
-            """
-        )
-        
-        self._connection.commit()
-        
-        if self._debug:
-            print("[SQLiteConnector] Updated completion ratios with actual runtime data")
-# -------------------------------------------
+    

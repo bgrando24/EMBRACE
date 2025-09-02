@@ -1,7 +1,7 @@
 import pandas as pd
 import sqlite3
 import sys
-from typing import Final
+from typing import Final, List
 
 from custom_types import T_EmbyWatchHistStatsRow
 
@@ -15,7 +15,7 @@ class Analytics:
         self.__connector: Final = SQLITE_DB_CONNECTOR
         self.__cursor: Final = SQLITE_DB_CONNECTOR.cursor()
     
-    def get_user_item_stats(self) -> :
+    def get_user_item_stats(self) -> List[T_EmbyWatchHistStatsRow]:
         """
         Generates a statistics view for each item, per user.
         
@@ -23,7 +23,7 @@ class Analytics:
         """
         # load data from DB, compute into dataframes
         self.__cursor.execute("SELECT * FROM watch_hist_user_item_stats")
-        db_results = self.__cursor.fetchall()
+        db_results: List[T_EmbyWatchHistStatsRow] = self.__cursor.fetchall()
         self.__connector.commit()
         return db_results
         

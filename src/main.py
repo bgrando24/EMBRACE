@@ -31,27 +31,27 @@ bgmd_hist = Emby.get_user_watch_hist(users["bgmd"], 10)
 
 # test db connection and watch history tables
 sqlite = SQLiteConnector(SQLITE_DB_NAME, debug=True)
-try: 
-    os.remove("sqlite_db/bgmd_db.db")
-except:
-    pass
+# try: 
+#     os.remove("sqlite_db/bgmd_db.db")
+# except:
+#     pass
 
 sqlite.connect_db()
 
 # ingest library metadata first so runtime is available for later calculations
-sqlite._INIT_create_library_items_schema()
-ok = sqlite.ingest_all_library_items(Emby.iter_all_items(), Emby.get_item_metadata)
-print("Ingest complete:", ok)
+# sqlite._INIT_create_library_items_schema()
+# ok = sqlite.ingest_all_library_items(Emby.iter_all_items(), Emby.get_item_metadata)
+# print("Ingest complete:", ok)
 
-# process watch history using actual runtimes
-sqlite._INIT_POPULATE_watch_hist_raw_events(Emby.get_all_watch_hist)
-sqlite._INIT_POPULATE_watch_hist_agg_sessions()
-sqlite._INIT_POPULATE_watch_hist_user_item_stats()
-sqlite.update_completion_ratios()
+# # process watch history using actual runtimes
+# sqlite._INIT_POPULATE_watch_hist_raw_events(Emby.get_all_watch_hist)
+# sqlite._INIT_POPULATE_watch_hist_agg_sessions()
+# sqlite._INIT_POPULATE_watch_hist_user_item_stats()
+# sqlite.update_completion_ratios()
 
-#create and ingest TMDB tables
-sqlite._INIT_create_tmdb_schemas()
-sqlite.ingest_tmdb_movie_tv_genres(TMDB.fetch_movie_genres, TMDB.fetch_tv_genres)
+# #create and ingest TMDB tables
+# sqlite._INIT_create_tmdb_schemas()
+# sqlite.ingest_tmdb_movie_tv_genres(TMDB.fetch_movie_genres, TMDB.fetch_tv_genres)
 
 # basic analytics testing
 if sqlite._connection is not None:

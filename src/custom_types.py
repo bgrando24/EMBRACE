@@ -1,4 +1,4 @@
-from typing import TypedDict, List
+from typing import TypedDict, List, Tuple
 
 class T_EmbyUserWatchHistItem(TypedDict):
     """Single item in user's watch history from Emby API"""
@@ -18,7 +18,26 @@ T_EmbyUserWatchHistResponse = List[T_EmbyUserWatchHistItem]
 
 T_EmbyAllUserWatchHist = dict[str, T_EmbyUserWatchHistResponse]
 
-# T_EmbyWatchHistStatSingleUsr = 
+T_EmbyWatchHistStatsRow = Tuple[
+    int,    # stat_id
+    str,    # user_id
+    str,    # item_id
+    int,    # total_sessions
+    int,    # total_seconds_watched
+    float,  # total_minutes_watched
+    float,  # best_completion_ratio
+    float,  # average_completion_ratio
+    int,    # rewatch_count
+    str,    # first_watched_timestamp
+    str,    # last_watched_timestamp
+    float,  # days_between_first_last
+    float,  # adherence_score
+    int,    # completed_sessions
+    int,    # partial_sessions
+    int,    # abandoned_sessions
+    int,    # sampled_sessions
+    str     # last_updated_timestamp
+]
 
 class T_EmbyUser(TypedDict):
     """User data from Emby API"""

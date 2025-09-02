@@ -3,6 +3,8 @@ import sqlite3
 import sys
 from typing import Final
 
+from custom_types import T_EmbyWatchHistStatsRow
+
 class Analytics:
     """Analytics helper class for functionality related to viewing, analysing, and manipulating SQL data within our python code"""
     
@@ -13,7 +15,7 @@ class Analytics:
         self.__connector: Final = SQLITE_DB_CONNECTOR
         self.__cursor: Final = SQLITE_DB_CONNECTOR.cursor()
     
-    def get_user_item_stats(self):
+    def get_user_item_stats(self) -> :
         """
         Generates a statistics view for each item, per user.
         

@@ -18,6 +18,7 @@ T_EmbyUserWatchHistResponse = List[T_EmbyUserWatchHistItem]
 
 T_EmbyAllUserWatchHist = dict[str, T_EmbyUserWatchHistResponse]
 
+
 T_EmbyWatchHistStatsRow = Tuple[
     int,    # stat_id
     str,    # user_id

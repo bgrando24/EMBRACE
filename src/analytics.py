@@ -22,11 +22,10 @@ class Analytics:
         
         Stats: num_plays, total_minutes_watched, avg_fraction_completed, first_watch_at, last_watch_at
         """
-        # load data from DB, compute into dataframes
+        # load data from DB, compute into dataframe
         self.__cursor.execute("SELECT * FROM watch_hist_user_item_stats")
         db_results: List[T_EmbyWatchHistStatsRow] = self.__cursor.fetchall()
         self.__connector.commit()
-        # return db_results
 
         # FOR REFERENCE:
         # int,    # stat_id
@@ -50,6 +49,7 @@ class Analytics:
 
         # load data into dataframe, rename column headers, calculate stats as above
         df = pd.DataFrame(db_results)
+    
         df.rename(columns={
             0: "stat_id",
             1: "user_id",
@@ -71,4 +71,5 @@ class Analytics:
             17: "last_updated_timestamp"
         }, inplace=True)
         
-        
+        stats_df = pd.DataFrame
+        for row in df.itertuples():

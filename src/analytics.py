@@ -48,6 +48,7 @@ class Analytics:
         # int,    # sampled_sessions
         # str     # last_updated_timestamp
 
+        # load data into dataframe, rename column headers, calculate stats as above
         df = pd.DataFrame(db_results)
         df.rename(columns={
             0: "stat_id",
@@ -69,5 +70,5 @@ class Analytics:
             16: "sampled_sessions",
             17: "last_updated_timestamp"
         }, inplace=True)
-
+        
         

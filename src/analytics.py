@@ -16,7 +16,7 @@ class Analytics:
         self.__connector: Final = SQLITE_DB_CONNECTOR
         self.__cursor: Final = SQLITE_DB_CONNECTOR.cursor()
     
-    def get_user_item_stats(self) -> List[T_EmbyWatchHistStatsRow]:
+    def get_user_item_stats(self):
         """
         Generates a statistics view for each item, per user.
         

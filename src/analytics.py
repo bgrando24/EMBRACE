@@ -5,6 +5,7 @@ from typing import Final, List, Dict, Tuple
 from collections import defaultdict
 
 from custom_types import T_EmbyWatchHistStatsRow
+from emby_connector import Emby
 
 class Analytics:
     """Analytics helper class for functionality related to viewing, analysing, and manipulating SQL data within our python code"""
@@ -18,7 +19,7 @@ class Analytics:
     
     def get_user_item_stats(self):
         """
-        Generates a statistics view for each item, per user.
+        Generates a statistics view per user for each applicable item.
         
         Stats: num_plays, total_minutes_watched, avg_fraction_completed, first_watch_at, last_watch_at
         """
@@ -27,25 +28,8 @@ class Analytics:
         db_results: List[T_EmbyWatchHistStatsRow] = self.__cursor.fetchall()
         self.__connector.commit()
 
-        # FOR REFERENCE:
-        # int,    # stat_id
-        # str,    # user_id
-        # str,    # item_id
-        # int,    # total_sessions
-        # int,    # total_seconds_watched
-        # float,  # total_minutes_watched
-        # float,  # best_completion_ratio
-        # float,  # average_completion_ratio
-        # int,    # rewatch_count
-        # str,    # first_watched_timestamp
-        # str,    # last_watched_timestamp
-        # float,  # days_between_first_last
-        # float,  # adherence_score
-        # int,    # completed_sessions
-        # int,    # partial_sessions
-        # int,    # abandoned_sessions
-        # int,    # sampled_sessions
-        # str     # last_updated_timestamp
+        # grab users from Emby connector
+        
 
         # load data into dataframe, rename column headers, calculate stats as above
         df = pd.DataFrame(db_results)
@@ -71,14 +55,17 @@ class Analytics:
             17: "last_updated_timestamp"
         }, inplace=True)
         
-        stats_df = pd.DataFrame
         # print(df["total_sessions"].mean())
-        
 
-        # for row in df.itertuples(False, None): 
+        # match items and users to string values based on IDs
+        items: Dict[str, str] = {}
+        users: Dict[str, str] = {}
+
+        # build output into here
+        stats_df = pd.DataFrame
+        for row in df.itertuples(False, None): 
             # print(row)
             # print("\n")
-
             # example 'row' iteration:
             # (
             #   465, 
@@ -101,3 +88,4 @@ class Analytics:
             #   '2025-09-02 09:54:16'
             # )
             
+            users.update({row[1]})

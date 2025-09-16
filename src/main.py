@@ -22,9 +22,9 @@ Emby = EmbyConnector(BASE_DOMAIN, EMBY_API_KEY, debug=(ENVIRONMENT == "dev"))
 TMDB = TMDBConnector(TMDB_READ_ACCESS_TOKEN, debug=(ENVIRONMENT == "dev"))
 
 # testing functions
-users = Emby.get_all_emby_users()
+# users = Emby.get_all_emby_users()
 # print(users)
-bgmd_hist = Emby.get_user_watch_hist(users["bgmd"], 10)
+# bgmd_hist = Emby.get_user_watch_hist(users["bgmd"], 10)
 # print(bgmd_hist)
 # all_user_hist = Emby.get_all_watch_hist(1)
 # print(all_user_hist)

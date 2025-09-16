@@ -50,11 +50,3 @@ sqlite.connect_db()
 # #create and ingest TMDB tables
 # sqlite._INIT_create_tmdb_schemas()
 # sqlite.ingest_tmdb_movie_tv_genres(TMDB.fetch_movie_genres, TMDB.fetch_tv_genres)
-
-# basic analytics testing
-if sqlite._connection is not None:
-    A = Analytics(sqlite._connection)
-else:
-    raise RuntimeError("Failed to establish SQLite connection for Analytics class")
-
-print(A.get_user_item_stats())

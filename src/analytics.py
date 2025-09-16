@@ -72,4 +72,32 @@ class Analytics:
         }, inplace=True)
         
         stats_df = pd.DataFrame
-        for row in df.itertuples():
+        # print(df["total_sessions"].mean())
+        
+
+        # for row in df.itertuples(False, None): 
+            # print(row)
+            # print("\n")
+
+            # example 'row' iteration:
+            # (
+            #   465, 
+            #   'f49c1281cadb43499181b8759f6ae81b', 
+            #   '536641', 
+            #   1, 
+            #   7458, 
+            #   124.3, 
+            #   0.9608348363823757, 
+            #   0.9608348363823757, 
+            #   0, 
+            #   '2025-08-22 21:53:57', 
+            #  '2025-08-22 21:53:57', 
+            #   0.0, 
+            #   0.772584385467663, 
+            #   1, 
+            #   0, 
+            #   0, 
+            #   0, 
+            #   '2025-09-02 09:54:16'
+            # )
+            

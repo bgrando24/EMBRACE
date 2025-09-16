@@ -1,6 +1,8 @@
 from typing import Final, Dict, Iterable, Optional, Sequence, Tuple
 import requests
 import sys
+from dotenv import load_dotenv
+import os
 
 from custom_types import T_EmbyUserWatchHistResponse, T_EmbyUsersResponse, T_EmbyAllUserWatchHist
 
@@ -10,26 +12,25 @@ class EmbyConnector:
     """
     
     # TODO: add logic to check for existing DB
-    def __init__(self, BASE_DOMAIN, EMBY_API_KEY, debug = False):
+    def __init__(self, debug = False):
         """
         Args:
-            BASE_DOMAIN (str):  Base URL for the Emby server, EXPECTED FORMAT: https://[domain]/emby
-            EMBY_API_KEY (str): Your Emby server API key
             debug (bool): Optional, whether to display debug print statements
         """
         
         self._debug: Final = debug
+
+        load_dotenv()
+        self.__BASE_DOMAIN: Final = os.getenv("BASE_DOMAIN")
+        self.__EMBY_API_KEY: Final = os.getenv("EMBY_API_KEY")
         
         # exit if variables are unavailable
-        if BASE_DOMAIN is None:
+        if self.__BASE_DOMAIN is None:
             print("Error: BASE_DOMAIN environment variable is not set.", file=sys.stderr)
             exit(1)
-        if EMBY_API_KEY is None:
+        if self.__EMBY_API_KEY is None:
             print("Error: EMBY_API_KEY environment variable is not set.", file=sys.stderr)
             exit(1)
-        
-        self.__BASE_DOMAIN: Final   = BASE_DOMAIN
-        self.__EMBY_API_KEY: Final  = EMBY_API_KEY
         
     
     def _default_item_fields(self) -> str:
@@ -59,7 +60,7 @@ class EmbyConnector:
     
     def get_default_user_id(self) -> str:
         """
-        Get the first available user ID (you might want to make this configurable)
+        Get first available user ID
         """
         users = self.get_all_emby_users()
         if users:
@@ -104,7 +105,7 @@ class EmbyConnector:
         Fetch all Emby users (including hidden users)
 
         Returns:
-            dict[str, str]: key = username, value = user ID
+            dictionary: key = username, value = user ID
         """
         response = requests.get(f"{self.__BASE_DOMAIN}/Users/Query?IsHidden=true&api_key={self.__EMBY_API_KEY}")
         response.raise_for_status()

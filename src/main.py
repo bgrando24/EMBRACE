@@ -1,9 +1,7 @@
-# pip modules
 from dotenv import load_dotenv
 import os
 from typing import Final
 
-# our modules
 from emby_connector import EmbyConnector
 from sqlite_connector import SQLiteConnector
 from tmdb_connector import TMDBConnector

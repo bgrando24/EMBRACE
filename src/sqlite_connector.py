@@ -8,9 +8,8 @@ import zlib
 from custom_types import T_EmbyAllUserWatchHist, T_TMDBGenres
 from datetime import datetime, timedelta
 
+
 class SQLiteConnector:
-    # TODO: Consider placing table names into a class-global structure?
-    
     """
     Provides functionality for interfacing with the app's SQLite database.
     
@@ -19,8 +18,11 @@ class SQLiteConnector:
     Attributes:
         _connection (Optional[sqlite3.Connection]): The database connection object. Method 'connect_db()' must be executed to obtain this object.
         cursor (sqlite3.Cursor): DB cursor used to execute queries. Method 'connect_db()' must be executed to set the cursor.
-        
     
+    ---
+    
+    TODO: Consider placing table names into a class-global structure?\n
+    TODO: store database fetches into memory cache?   
     """
     _cursor: Optional[sqlite3.Cursor]
     _connection: Optional[sqlite3.Connection]

@@ -6,27 +6,38 @@ from dotenv import load_dotenv
 import os
 import sqlite3
 import sys
+from pathlib import Path
 
 print("============================ Running 'db_imdb_create-and-load' Script ============================")
 
 load_dotenv()
 
-IMDB_DB_PATH: Final = os.getenv("IMDB_DB_PATH")
-if (IMDB_DB_PATH == None):
-    print("ERROR: 'IMDB_DB_PATH' environment variable is not set! Check your .env", file=sys.stderr)
-    exit(1)
+# remember to set database path in .env file
+RAW_DB_PATH: Final = os.getenv("IMDB_DB_PATH")
+if not RAW_DB_PATH:
+    print("ERROR: 'IMDB_DB_PATH' environment variable is not set!", file=sys.stderr)
+    sys.exit(1)
+
+# expanduser helps manage "~" whether linux or macos
+db_dir = Path(RAW_DB_PATH).expanduser()
+if not db_dir.parts:
+    print("ERROR: 'IMDB_DB_PATH' resolves to an empty path.", file=sys.stderr)
+    sys.exit(1)
+
+try:
+    db_dir.mkdir(parents=True, exist_ok=True)
+except OSError as exc:
+    print(f"ERROR: Unable to create '{db_dir}': {exc}", file=sys.stderr)
+    sys.exit(1)
 
 DB_NAME: Final = "imdb.db"
-DB_DIR: Final = os.path.join(IMDB_DB_PATH, DB_NAME)
-
+DB_PATH: Final = db_dir / DB_NAME
+        
 conn: sqlite3.Connection
 curs: sqlite3.Cursor
 
-# create directory, then connect to db (creates db file if not exists), then create tables
-os.makedirs(IMDB_DB_PATH, exist_ok=True)
-        
 try:
-    conn = sqlite3.connect(DB_DIR)
+    conn = sqlite3.connect(DB_PATH)
     # check db is actually connected and reachable
     conn.execute("SELECT 1;")
     print("DB connection tested and successful!")

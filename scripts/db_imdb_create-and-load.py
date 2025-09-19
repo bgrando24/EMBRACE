@@ -61,7 +61,7 @@ try:
         """
             CREATE TABLE IF NOT EXISTS genres (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                t_const TEXT FOREIGN KEY NOT NULL,
+                t_const TEXT NOT NULL,
                 genre TEXT NOT NULL
             )
         """
@@ -71,7 +71,7 @@ try:
         """
             CREATE TABLE IF NOT EXISTS directors (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                t_const TEXT FOREIGN KEY NOT NULL,
+                t_const TEXT NOT NULL,
                 director TEXT NOT NULL
             )
         """
@@ -81,7 +81,7 @@ try:
         """
             CREATE TABLE IF NOT EXISTS title_writers_map (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                t_const TEXT FOREIGN KEY NOT NULL,
+                t_const TEXT NOT NULL,
                 writer TEXT NOT NULL
             )
         """
@@ -91,7 +91,7 @@ try:
         """
             CREATE TABLE IF NOT EXISTS episodes (
                 t_const TEXT PRIMARY KEY NOT NULL,
-                parent_t_const TEXT FOREIGN KEY NOT NULL,
+                parent_t_const TEXT NOT NULL,
                 season_num INTEGER,
                 episode_num INTEGER
             )
@@ -102,8 +102,8 @@ try:
         """
             CREATE TABLE IF NOT EXISTS roles (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                t_const TEXT FOREIGN KEY NOT NULL,
-                n_const TEXT FOREIGN KEY NOT NULL,
+                t_const TEXT NOT NULL,
+                n_const TEXT NOT NULL,
                 category TEXT,
                 job TEXT,
                 characters TEXT

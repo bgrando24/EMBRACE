@@ -5,7 +5,6 @@ from typing import Final
 from emby_connector import EmbyConnector
 from sqlite_connector import SQLiteConnector
 from tmdb_connector import TMDBConnector
-from analytics import Analytics
 
 # load and extract env variables
 load_dotenv()
@@ -16,7 +15,7 @@ ENVIRONMENT: Final = os.getenv("ENVIRONMENT") or "dev"
 SQLITE_DB_NAME: Final = os.getenv("SQLITE_DB_NAME") or "EMBRACE_SQLITE_DB.db"
 
 # init API connectors
-Emby = EmbyConnector(BASE_DOMAIN, EMBY_API_KEY, debug=(ENVIRONMENT == "dev"))
+Emby = EmbyConnector(debug=(ENVIRONMENT == "dev"))
 TMDB = TMDBConnector(TMDB_READ_ACCESS_TOKEN, debug=(ENVIRONMENT == "dev"))
 
 # testing functions

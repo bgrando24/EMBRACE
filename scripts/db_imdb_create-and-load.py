@@ -60,7 +60,7 @@ try:
     curs.execute(
         """
             CREATE TABLE IF NOT EXISTS genres (
-                id INTEGER PRIMARY KEY NOT NULL AUTOINCREMENT,
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
                 t_const TEXT FOREIGN KEY NOT NULL,
                 genre TEXT NOT NULL
             )
@@ -70,7 +70,7 @@ try:
     curs.execute(
         """
             CREATE TABLE IF NOT EXISTS directors (
-                id INTEGER PRIMARY KEY NOT NULL AUTOINCREMENT,
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
                 t_const TEXT FOREIGN KEY NOT NULL,
                 director TEXT NOT NULL
             )
@@ -80,7 +80,7 @@ try:
     curs.execute(
         """
             CREATE TABLE IF NOT EXISTS title_writers_map (
-                id INTEGER PRIMARY KEY NOT NULL AUTOINCREMENT,
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
                 t_const TEXT FOREIGN KEY NOT NULL,
                 writer TEXT NOT NULL
             )
@@ -101,7 +101,7 @@ try:
     curs.execute(
         """
             CREATE TABLE IF NOT EXISTS roles (
-                id INTEGER PRIMARY KEY NOT NULL AUTOINCREMENT,
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
                 t_const TEXT FOREIGN KEY NOT NULL,
                 n_const TEXT FOREIGN KEY NOT NULL,
                 category TEXT,

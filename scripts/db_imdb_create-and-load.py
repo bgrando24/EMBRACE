@@ -41,22 +41,98 @@ curs = conn.cursor()
 # title.akas.tsv   title.crew.tsv    title.principals.tsv
 
 try:
-     curs.execute(
-         """
-            CREATE TABLE IF NOT EXISTS titles (
-                t_const TEXT PRIMARY KEY NOT NULL,
-                title_type TEXT,
-                primary_title TEXT,
-                original_title TEXT,
-                is_adult INTEGER,
-                start_year TEXT,
-                end_year TEXT,
-                runtime_minutes REAL
+    # titles table: titles of a given movie, TV series, or episode
+    curs.execute(
+        """
+        CREATE TABLE IF NOT EXISTS titles (
+            t_const TEXT PRIMARY KEY NOT NULL,
+            title_type TEXT,
+            primary_title TEXT,
+            original_title TEXT,
+            is_adult INTEGER,
+            start_year TEXT,
+            end_year TEXT,
+            runtime_minutes REAL
+        )
+        """
+    )
+    # genres table: stores the one-to-many relationship between a title and its genres
+    curs.execute(
+        """
+            CREATE TABLE IF NOT EXISTS genres (
+                id INTEGER PRIMARY KEY NOT NULL AUTOINCREMENT,
+                t_const TEXT FOREIGN KEY NOT NULL,
+                genre TEXT NOT NULL
             )
-         """
-         )
+        """
+    )
+    # directors table: stores the one-to-many relationship between a title and its directors
+    curs.execute(
+        """
+            CREATE TABLE IF NOT EXISTS directors (
+                id INTEGER PRIMARY KEY NOT NULL AUTOINCREMENT,
+                t_const TEXT FOREIGN KEY NOT NULL,
+                director TEXT NOT NULL
+            )
+        """
+    )
+    # title_writers_map table: stores the one-to-many relationship between a title and the featured writers
+    curs.execute(
+        """
+            CREATE TABLE IF NOT EXISTS title_writers_map (
+                id INTEGER PRIMARY KEY NOT NULL AUTOINCREMENT,
+                t_const TEXT FOREIGN KEY NOT NULL,
+                writer TEXT NOT NULL
+            )
+        """
+    )
+    # episodes table: individual episodes of a TV series
+    curs.execute(
+        """
+            CREATE TABLE IF NOT EXISTS episodes (
+                t_const TEXT PRIMARY KEY NOT NULL,
+                parent_t_const TEXT FOREIGN KEY NOT NULL,
+                season_num INTEGER,
+                episode_num INTEGER
+            )
+        """
+    )
+    # roles table: the individual roles of cast/crew for a given title item
+    curs.execute(
+        """
+            CREATE TABLE IF NOT EXISTS roles (
+                id INTEGER PRIMARY KEY NOT NULL AUTOINCREMENT,
+                t_const TEXT FOREIGN KEY NOT NULL,
+                n_const TEXT FOREIGN KEY NOT NULL,
+                category TEXT,
+                job TEXT,
+                characters TEXT
+            )
+        """
+    )
+    # ratings table: self-explanatory
+    curs.execute(
+        """
+            CREATE TABLE IF NOT EXISTS ratings (
+                t_const TEXT PRIMARY KEY NOT NULL,
+                avg_rating REAL,
+                num_votes INTEGER
+            )
+        """
+    )
+    # persons table: basic details for individual people referenced in other tables 
+    curs.execute(
+        """
+            CREATE TABLE IF NOT EXISTS persons (
+                n_const TEXT PRIMARY KEY NOT NULL,
+                name TEXT,
+                birth_year TEXT,
+                death_year TEXT
+            )
+        """
+    )
      
-     conn.commit()
+    conn.commit()
     
 except sqlite3.Error as e:
     print(f"ERROR: Creating tables failed: {e}", file=sys.stderr)

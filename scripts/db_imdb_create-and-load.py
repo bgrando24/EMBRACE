@@ -87,10 +87,10 @@ try:
             )
         """
     )
-    # title_writers_map table: stores the one-to-many relationship between a title and the featured writers
+    # writers table: stores the one-to-many relationship between a title and the featured writers
     curs.execute(
         """
-            CREATE TABLE IF NOT EXISTS title_writers_map (
+            CREATE TABLE IF NOT EXISTS writers (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 t_const TEXT NOT NULL,
                 writer TEXT NOT NULL

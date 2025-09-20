@@ -12,29 +12,7 @@ print("============================ Running 'db_imdb_create-and-load' Script ===
 
 load_dotenv()
 
-# remember to set database path in .env file
-RAW_DB_PATH: Final = os.getenv("IMDB_DB_PATH")
-if not RAW_DB_PATH:
-    print("ERROR: 'IMDB_DB_PATH' environment variable is not set!", file=sys.stderr)
-    sys.exit(1)
 
-# expanduser helps manage "~" whether linux or macos
-db_dir = Path(RAW_DB_PATH).expanduser()
-if not db_dir.parts:
-    print("ERROR: 'IMDB_DB_PATH' resolves to an empty path.", file=sys.stderr)
-    sys.exit(1)
-
-try:
-    db_dir.mkdir(parents=True, exist_ok=True)
-except OSError as exc:
-    print(f"ERROR: Unable to create '{db_dir}': {exc}", file=sys.stderr)
-    sys.exit(1)
-
-DB_NAME: Final = "imdb.db"
-DB_PATH: Final = db_dir / DB_NAME
-        
-conn: sqlite3.Connection
-curs: sqlite3.Cursor
 
 try:
     conn = sqlite3.connect(DB_PATH)

@@ -4,44 +4,65 @@
 from typing import Final
 from dotenv import load_dotenv
 import os
-import sqlite3
 import sys
-from pathlib import Path
+import mysql.connector
+from mysql.connector import Error as MySQLError
 
 print("============================ Running 'db_imdb_create-and-load' Script ============================")
 
 load_dotenv()
+DB_NAME: Final      = os.getenv("MYSQL_DATABASE")
+DB_PWD: Final       = os.getenv("MYSQL_ROOT_PASSWORD")
+DB_USER: Final      = os.getenv("MYSQL_USER")
+DB_USER_PWD: Final  = os.getenv("MYSQL_PASSWORD")
+DB_HOST: Final      = os.getenv("MYSQL_HOST")
+DB_PORT: Final      = os.getenv("MYSQL_PORT")
 
-
+# check now if any environment variable is missing, otherwise causes headaches for db connection
+required = {
+    "MYSQL_DATABASE": DB_NAME,
+    "MYSQL_ROOT_PASSWORD": DB_PWD,
+    "MYSQL_USER": DB_USER,
+    "MYSQL_PASSWORD": DB_USER_PWD,
+    "MYSQL_HOST": DB_HOST,
+    "MYSQL_PORT": DB_PORT,
+}
+missing = [k for k, v in required.items() if v in (None, "")]
+if missing:
+    raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")
 
 try:
-    conn = sqlite3.connect(DB_PATH)
-    # check db is actually connected and reachable
-    conn.execute("SELECT 1;")
-    print("DB connection tested and successful!")
-except sqlite3.Error as e:
-    print(f"ERROR: Database connection failed: {e}", file=sys.stderr)
-    exit(1)
+    # https://dev.mysql.com/doc/connector-python/en/connector-python-connectargs.html
+    db = mysql.connector.connect(
+        port        = DB_PORT,
+        host        = DB_HOST,
+        user        = DB_USER,
+        password    = DB_USER_PWD,
+        database    = DB_NAME
+    )
+
+    if not db.connection_id:
+        raise RuntimeError(f"Error with database connection object, current object: {db}")
     
-curs = conn.cursor()
+except MySQLError as e:
+    print(f"ERROR: Database connection failed: {e}", file=sys.stderr)
+    sys.exit(1)
 
-
-# name.basics.tsv  title.basics.tsv  title.episode.tsv  title.ratings.tsv
-# title.akas.tsv   title.crew.tsv    title.principals.tsv
+curs: Final = db.cursor()
 
 try:
     # titles table: titles of a given movie, TV series, or episode
     curs.execute(
         """
         CREATE TABLE IF NOT EXISTS titles (
-            t_const TEXT PRIMARY KEY NOT NULL,
-            title_type TEXT,
-            primary_title TEXT,
-            original_title TEXT,
-            is_adult INTEGER,
-            start_year TEXT,
-            end_year TEXT,
-            runtime_minutes REAL
+            t_const VARCHAR(20) PRIMARY KEY NOT NULL,
+            title_type VARCHAR(32),
+            primary_title VARCHAR(512),
+            original_title VARCHAR(512),
+            is_adult TINYINT(1),
+            start_year VARCHAR(8),
+            end_year VARCHAR(8),
+            runtime_minutes INT
         )
         """
     )
@@ -49,9 +70,9 @@ try:
     curs.execute(
         """
             CREATE TABLE IF NOT EXISTS genres (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                t_const TEXT NOT NULL,
-                genre TEXT NOT NULL
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                t_const VARCHAR(20) NOT NULL,
+                genre VARCHAR(64) NOT NULL
             )
         """
     )
@@ -59,9 +80,9 @@ try:
     curs.execute(
         """
             CREATE TABLE IF NOT EXISTS directors (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                t_const TEXT NOT NULL,
-                director TEXT NOT NULL
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                t_const VARCHAR(20) NOT NULL,
+                director VARCHAR(20) NOT NULL
             )
         """
     )
@@ -69,9 +90,9 @@ try:
     curs.execute(
         """
             CREATE TABLE IF NOT EXISTS writers (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                t_const TEXT NOT NULL,
-                writer TEXT NOT NULL
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                t_const VARCHAR(20) NOT NULL,
+                writer VARCHAR(20) NOT NULL
             )
         """
     )
@@ -79,10 +100,10 @@ try:
     curs.execute(
         """
             CREATE TABLE IF NOT EXISTS episodes (
-                t_const TEXT PRIMARY KEY NOT NULL,
-                parent_t_const TEXT NOT NULL,
-                season_num INTEGER,
-                episode_num INTEGER
+                t_const VARCHAR(20) PRIMARY KEY NOT NULL,
+                parent_t_const VARCHAR(20) NOT NULL,
+                season_num INT,
+                episode_num INT
             )
         """
     )
@@ -90,11 +111,11 @@ try:
     curs.execute(
         """
             CREATE TABLE IF NOT EXISTS roles (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                t_const TEXT NOT NULL,
-                n_const TEXT NOT NULL,
-                category TEXT,
-                job TEXT,
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                t_const VARCHAR(20) NOT NULL,
+                n_const VARCHAR(20) NOT NULL,
+                category VARCHAR(64),
+                job VARCHAR(128),
                 characters TEXT
             )
         """
@@ -103,9 +124,9 @@ try:
     curs.execute(
         """
             CREATE TABLE IF NOT EXISTS ratings (
-                t_const TEXT PRIMARY KEY NOT NULL,
-                avg_rating REAL,
-                num_votes INTEGER
+                t_const VARCHAR(20) PRIMARY KEY NOT NULL,
+                avg_rating DOUBLE,
+                num_votes INT
             )
         """
     )
@@ -113,19 +134,24 @@ try:
     curs.execute(
         """
             CREATE TABLE IF NOT EXISTS persons (
-                n_const TEXT PRIMARY KEY NOT NULL,
-                name TEXT,
-                birth_year TEXT,
-                death_year TEXT
+                n_const VARCHAR(20) PRIMARY KEY NOT NULL,
+                name VARCHAR(256),
+                birth_year VARCHAR(8),
+                death_year VARCHAR(8)
             )
         """
     )
      
-    conn.commit()
+    db.commit()
     
-except sqlite3.Error as e:
+    # double-check tables exist
+    curs.execute("SHOW TABLES")
+    print(f"Tables in database: \n{curs.fetchall()}")
+    db.commit()
+    
+except MySQLError as e:
     print(f"ERROR: Creating tables failed: {e}", file=sys.stderr)
-    exit(1)
+    sys.exit(1)
 
 
 print("============================ Script 'db_imdb_create-and-load' Completed! ============================")

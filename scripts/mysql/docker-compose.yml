@@ -8,7 +8,7 @@ services:
     ports:
       - "3306:3306"
     env_file:
-      - ./scripts/mysql/.env
+      - .env
     volumes:
       - mysql_data:/var/lib/mysql
     healthcheck:

@@ -1,0 +1,23 @@
+services:
+  db:
+    image: embrace-mysql
+    build:
+      context: ./scripts/mysql
+      dockerfile: Dockerfile
+    container_name: embrace-mysql
+    ports:
+      - "3306:3306"
+    env_file:
+      - ./scripts/mysql/.env
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$${MYSQL_ROOT_PASSWORD} || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  mysql_data:

@@ -76,7 +76,7 @@ try:
         raise FileNotFoundError(f"Directors TSV not found: {directors_tsv_path}")
     # "When doing bulk inserts into tables with auto-increment columns, set innodb_autoinc_lock_mode to 2 (interleaved) instead of 1 (consecutive)."
     # apparently '2' is the default value anyway?
-    curs.execute("SET innodb_autoinc_lock_mode=2")
+    # curs.execute("SET innodb_autoinc_lock_mode=2")
 
     # Use MySQL's bulk loader so we stream data straight from the TSV instead of materializing every row in Python.
     load_directors_sql = """

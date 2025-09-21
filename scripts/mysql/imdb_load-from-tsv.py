@@ -185,7 +185,7 @@ try:
         FROM genres_staging s
         JOIN JSON_TABLE(
             CONCAT('["', REPLACE(s.genres, ',', '","'), '"]'),
-            '$[*]' COLUMNS (genres VARCHAR(64) PATH '$')
+            '$[*]' COLUMNS (genre VARCHAR(64) PATH '$')
         ) jt
         WHERE s.genres IS NOT NULL
               AND s.genres <> ''

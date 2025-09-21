@@ -64,8 +64,8 @@ try:
         CREATE TABLE IF NOT EXISTS titles (
             t_const VARCHAR(20) PRIMARY KEY NOT NULL,
             type VARCHAR(32),
-            primary VARCHAR(512),
-            original VARCHAR(512),
+            primary_name VARCHAR(512),
+            original_name VARCHAR(512),
             is_adult TINYINT(1),
             start_year VARCHAR(8),
             end_year VARCHAR(8),

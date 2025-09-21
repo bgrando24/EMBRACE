@@ -51,18 +51,18 @@ except MySQLError as e:
 curs: Final = db.cursor()
 
 # load in ALL files - yes this is probably not the most efficient method
-df_principals = pd.read_csv("~/Documents/imdb-db/title.principals.tsv", sep="\t")
-df_principals.replace(r"\N", np.nan, inplace=True)
-df_names = pd.read_csv("~/Documents/imdb-db/name.basics.tsv", sep="\t")
-df_names.replace(r"\N", np.nan, inplace=True)
-df_titles = pd.read_csv("~/Documents/imdb-db/title.basics.tsv", sep="\t")
-df_titles.replace(r"\N", np.nan, inplace=True)
-df_crew = pd.read_csv("~/Documents/imdb-db/title.crew.tsv", sep="\t")
-df_crew.replace(r"\N", np.nan, inplace=True)
-df_episodes = pd.read_csv("~/Documents/imdb-db/title.episode.tsv", sep="\t")
-df_episodes.replace(r"\N", np.nan, inplace=True)
-df_ratings = pd.read_csv("~/Documents/imdb-db/title.ratings.tsv", sep="\t")
-df_ratings.replace(r"\N", np.nan, inplace=True)
+# df_principals = pd.read_csv("~/Documents/imdb-db/title.principals.tsv", sep="\t")
+# df_principals.replace(r"\N", np.nan, inplace=True)
+# df_names = pd.read_csv("~/Documents/imdb-db/name.basics.tsv", sep="\t")
+# df_names.replace(r"\N", np.nan, inplace=True)
+# df_titles = pd.read_csv("~/Documents/imdb-db/title.basics.tsv", sep="\t")
+# df_titles.replace(r"\N", np.nan, inplace=True)
+# df_crew = pd.read_csv("~/Documents/imdb-db/title.crew.tsv", sep="\t")
+# df_crew.replace(r"\N", np.nan, inplace=True)
+# df_episodes = pd.read_csv("~/Documents/imdb-db/title.episode.tsv", sep="\t")
+# df_episodes.replace(r"\N", np.nan, inplace=True)
+# df_ratings = pd.read_csv("~/Documents/imdb-db/title.ratings.tsv", sep="\t")
+# df_ratings.replace(r"\N", np.nan, inplace=True)
 
 # below lists what columns each table actually needs, and from what source
 # general process is to extract the required columns from the files, then use them in SQL inserts

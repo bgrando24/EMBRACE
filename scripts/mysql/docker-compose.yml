@@ -11,7 +11,7 @@ services:
       - .env
     volumes:
     - mysql_data:/var/lib/mysql
-    - ${IMDB_DATA_DIR}:/var/lib/mysql-files:ro
+    - ${IMDB_DATA_DIR}:/var/lib/mysql-files
     - ./init_scripts:/docker-entrypoint-initdb.d
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$${MYSQL_ROOT_PASSWORD} || exit 1"]

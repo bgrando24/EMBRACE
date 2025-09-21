@@ -10,7 +10,8 @@ services:
     env_file:
       - .env
     volumes:
-      - mysql_data:/var/lib/mysql
+    - mysql_data:/var/lib/mysql
+    - ${IMDB_DATA_DIR}:/var/lib/mysql-files:ro
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$${MYSQL_ROOT_PASSWORD} || exit 1"]
       interval: 10s

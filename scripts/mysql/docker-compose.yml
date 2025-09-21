@@ -2,7 +2,7 @@ services:
   db:
     image: embrace-mysql
     build:
-      context: ./scripts/mysql
+      context: .
       dockerfile: Dockerfile
     container_name: embrace-mysql
     ports:

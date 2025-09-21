@@ -37,7 +37,8 @@ try:
         host        = DB_HOST,
         user        = DB_USER,
         password    = DB_USER_PWD,
-        database    = DB_NAME
+        database    = DB_NAME,
+        allow_local_infile=True,
     )
 
     if not db.connection_id:
@@ -65,12 +66,39 @@ df_ratings.replace(r"\N", np.nan, inplace=True)
 
 # below lists what columns each table actually needs, and from what source
 # general process is to extract the required columns from the files, then use them in SQL inserts
+# https://dev.mysql.com/doc/refman/8.4/en/optimizing-innodb-bulk-data-loading.html
 
 
 # Table 'directors': id (auto), t_const (crew), n_const (crew)
-directors_table = df_crew[["tconst", "directors"]].copy().to_numpy()
-for row in directors_table:
-    curs.execute(f"INSERT INTO directors (t_const, n_const) VALUES {row[0]}, {row[1]}")
+try:
+    directors_tsv_path = os.path.expanduser("~/Documents/imdb-db/title.crew.tsv")
+    if not os.path.exists(directors_tsv_path):
+        raise FileNotFoundError(f"Directors TSV not found: {directors_tsv_path}")
+    # "When doing bulk inserts into tables with auto-increment columns, set innodb_autoinc_lock_mode to 2 (interleaved) instead of 1 (consecutive)."
+    # apparently '2' is the default value anyway?
+    curs.execute("SET innodb_autoinc_lock_mode=2")
+
+    # Use MySQL's bulk loader so we stream data straight from the TSV instead of materializing every row in Python.
+    load_directors_sql = """
+        LOAD DATA LOCAL INFILE %s
+        INTO TABLE directors
+        FIELDS TERMINATED BY '\\t'
+        LINES TERMINATED BY '\\n'
+        IGNORE 1 LINES
+        (@tConst, @nConst, @writers)
+        SET t_const = CASE WHEN @tConst = '' OR @tConst = '\\N' THEN NULL ELSE @tConst END,
+            n_const = NULLIF(@nConst, '\\N')
+    """
+
+    curs.execute(load_directors_sql, (directors_tsv_path,))
+    db.commit()
+
+except (MySQLError, FileNotFoundError) as e:
+    print(f"ERROR: Directors load failed: {e}", file=sys.stderr)
+    sys.exit(1)
+
+print("\n~~~~~~~Import for table 'directors' finished\n")
+
 
 
 # Table 'episodes' (episodes): t_const, parent_t_const, season_num, episode_num
@@ -81,8 +109,12 @@ for row in directors_table:
 
 # Table 'ratings' (ratings): t_const, avg_rating, num_votes
 
-# Table 'roles' (principals): id (auto), t_const, n_const, category, job, characters (array?)
-
 # Table 'titles' (title): t_const, type, primary, original, is_adult, start_year, end_year, runtime_minutes
 
 # Table 'writers' (crew): id (auto), t_const, n_const
+
+# Table 'roles' (principals): id (auto), t_const, n_const, category, job, characters (array?)
+
+
+
+print("============================ Finished 'imdb_load-from-tsv' Script! ============================")

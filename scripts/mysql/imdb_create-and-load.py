@@ -52,6 +52,7 @@ curs: Final = db.cursor()
 
 try:
     curs.execute(f"CREATE DATABASE IF NOT EXISTS {DB_NAME}")
+    curs.execute("USE imdb")
     db.commit()
 except MySQLError as e:
     print(f"ERROR: Creating database: {e}", file=sys.stderr)

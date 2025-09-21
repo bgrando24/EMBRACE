@@ -1,3 +1,5 @@
+# imports data from the TSV files into the database, aligning with table structures
+
 from typing import Final
 from dotenv import load_dotenv
 import os
@@ -53,80 +55,68 @@ except MySQLError as e:
 
 curs: Final = db.cursor()
 
-# load in ALL files - yes this is probably not the most efficient method
-# df_principals = pd.read_csv("~/Documents/imdb-db/title.principals.tsv", sep="\t")
-# df_principals.replace(r"\N", np.nan, inplace=True)
-# df_names = pd.read_csv("~/Documents/imdb-db/name.basics.tsv", sep="\t")
-# df_names.replace(r"\N", np.nan, inplace=True)
-# df_titles = pd.read_csv("~/Documents/imdb-db/title.basics.tsv", sep="\t")
-# df_titles.replace(r"\N", np.nan, inplace=True)
-# df_crew = pd.read_csv("~/Documents/imdb-db/title.crew.tsv", sep="\t")
-# df_crew.replace(r"\N", np.nan, inplace=True)
-# df_episodes = pd.read_csv("~/Documents/imdb-db/title.episode.tsv", sep="\t")
-# df_episodes.replace(r"\N", np.nan, inplace=True)
-# df_ratings = pd.read_csv("~/Documents/imdb-db/title.ratings.tsv", sep="\t")
-# df_ratings.replace(r"\N", np.nan, inplace=True)
-
 # below lists what columns each table actually needs, and from what source
 # general process is to extract the required columns from the files, then use them in SQL inserts
 # https://dev.mysql.com/doc/refman/8.4/en/optimizing-innodb-bulk-data-loading.html
 
 
 # Table 'directors': id (auto), t_const (crew), n_const (crew)
-# try:
-#     # crew_tsv_path = os.path.expanduser("~/Documents/imdb-db/title.crew.tsv")
-#     crew_tsv_path = "/import/title.crew.tsv"
-#     # if not os.path.isabs(crew_tsv_path):
-#     #     crew_tsv_path = os.path.abspath(crew_tsv_path)
-#     # if not os.path.exists(crew_tsv_path):
-#     #     raise FileNotFoundError(f"Crew TSV not found on server: {crew_tsv_path}")
+try:
+    # crew_tsv_path = os.path.expanduser("~/Documents/imdb-db/title.crew.tsv")
+    crew_tsv_path = "/import/title.crew.tsv"
+    # if not os.path.isabs(crew_tsv_path):
+    #     crew_tsv_path = os.path.abspath(crew_tsv_path)
+    # if not os.path.exists(crew_tsv_path):
+    #     raise FileNotFoundError(f"Crew TSV not found on server: {crew_tsv_path}")
 
-#     # 1) Staging table mirrors the TSV columns
-#     curs.execute("""
-#         CREATE TABLE IF NOT EXISTS crew_staging (
-#             tconst VARCHAR(12) NOT NULL,
-#             directors_csv TEXT NULL,
-#             writers_csv   TEXT NULL
-#         ) ENGINE=InnoDB
-#     """)
-#     curs.execute("TRUNCATE TABLE crew_staging")
+    # 1) Staging table mirrors the TSV columns
+    curs.execute("""
+        CREATE TABLE IF NOT EXISTS crew_staging (
+            tconst VARCHAR(12) NOT NULL,
+            directors_csv TEXT NULL,
+            writers_csv   TEXT NULL
+        ) ENGINE=InnoDB
+    """)
+    curs.execute("TRUNCATE TABLE crew_staging")
 
-#     # 2) Bulk load raw TSV into staging (server-side INFILE)
-#     crew_load_stage_sql = f"""
-#         LOAD DATA INFILE %s
-#         INTO TABLE crew_staging
-#         FIELDS TERMINATED BY '\\t'
-#         LINES TERMINATED BY '\\n'
-#         IGNORE 1 LINES
-#         (@tconst, @directors_csv, @writers_csv)
-#         SET
-#           tconst        = NULLIF(@tconst, '\\\\N'),
-#           directors_csv = NULLIF(@directors_csv, '\\\\N'),
-#           writers_csv   = NULLIF(@writers_csv, '\\\\N')
-#     """
-#     curs.execute(crew_load_stage_sql, (crew_tsv_path,))
+    # 2) Bulk load raw TSV into staging (server-side INFILE)
+    crew_load_stage_sql = f"""
+        LOAD DATA INFILE %s
+        INTO TABLE crew_staging
+        FIELDS TERMINATED BY '\\t'
+        LINES TERMINATED BY '\\n'
+        IGNORE 1 LINES
+        (@tconst, @directors_csv, @writers_csv)
+        SET
+          tconst        = NULLIF(@tconst, '\\\\N'),
+          directors_csv = NULLIF(@directors_csv, '\\\\N'),
+          writers_csv   = NULLIF(@writers_csv, '\\\\N')
+    """
+    curs.execute(crew_load_stage_sql, (crew_tsv_path,))
 
-#     # 3) Normalize directors into one row per person
-#     curs.execute("""
-#         INSERT INTO directors (t_const, n_const)
-#         SELECT s.tconst,
-#                jt.nconst
-#         FROM crew_staging s
-#         JOIN JSON_TABLE(
-#             CONCAT('["', REPLACE(s.directors_csv, ',', '","'), '"]'),
-#             '$[*]' COLUMNS (nconst VARCHAR(12) PATH '$')
-#         ) jt
-#         WHERE s.directors_csv IS NOT NULL
-#               AND s.directors_csv <> ''
-#     """)
+    # 3) Normalize directors into one row per person
+    curs.execute("""
+        INSERT INTO directors (t_const, n_const)
+        SELECT s.tconst,
+               jt.nconst
+        FROM crew_staging s
+        JOIN JSON_TABLE(
+            CONCAT('["', REPLACE(s.directors_csv, ',', '","'), '"]'),
+            '$[*]' COLUMNS (nconst VARCHAR(12) PATH '$')
+        ) jt
+        WHERE s.directors_csv IS NOT NULL
+              AND s.directors_csv <> ''
+    """)
 
-#     db.commit()
+    curs.execute("SELECT COUNT(*) FROM directors")
+    print(f"Rows in 'directors' table after data load: {curs.fetchall()}")
+    db.commit()
 
-# except (MySQLError, FileNotFoundError) as e:
-#     print(f"ERROR: crew table load/normalize failed: {e}", file=sys.stderr)
-#     sys.exit(1)
+except (MySQLError, FileNotFoundError) as e:
+    print(f"ERROR: crew table load/normalize failed: {e}", file=sys.stderr)
+    sys.exit(1)
 
-# print("\n~~~~~~~Import for table 'directors' finished!\n")
+print("\n~~~~~~~Import for table 'directors' finished!\n")
 
 
 
@@ -148,6 +138,11 @@ try:
             episode_num     = NULLIF(@episodeNumber, '\\\\N')
         """
     curs.execute(episodes_load_stage_sql, (episodes_tsv_path,))
+    
+    curs.execute("SELECT COUNT(*) FROM directors")
+    print(f"Rows in 'directors' table after data load: {curs.fetchall()}")
+    
+    db.commit()
 
 except (MySQLError, FileNotFoundError) as e:
     print(f"ERROR: episodes table data load failed: {e}", file=sys.stderr)

@@ -74,11 +74,12 @@ curs: Final = db.cursor()
 
 # Table 'directors': id (auto), t_const (crew), n_const (crew)
 try:
-    crew_tsv_path = os.path.expanduser("~/Documents/imdb-db/title.crew.tsv")  # ABSOLUTE path on the DB server
-    if not os.path.isabs(crew_tsv_path):
-        crew_tsv_path = os.path.abspath(crew_tsv_path)
-    if not os.path.exists(crew_tsv_path):
-        raise FileNotFoundError(f"Crew TSV not found on server: {crew_tsv_path}")
+    # crew_tsv_path = os.path.expanduser("~/Documents/imdb-db/title.crew.tsv")
+    crew_tsv_path = "/import/title.crew.tsv"
+    # if not os.path.isabs(crew_tsv_path):
+    #     crew_tsv_path = os.path.abspath(crew_tsv_path)
+    # if not os.path.exists(crew_tsv_path):
+    #     raise FileNotFoundError(f"Crew TSV not found on server: {crew_tsv_path}")
 
     # 1) Staging table mirrors the TSV columns
     curs.execute("""

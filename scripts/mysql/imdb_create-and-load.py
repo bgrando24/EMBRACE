@@ -8,7 +8,7 @@ import sys
 import mysql.connector
 from mysql.connector import Error as MySQLError
 
-print("============================ Running 'db_imdb_create-and-load' Script ============================")
+print("============================ Running 'imdb_create-and-load' Script ============================")
 
 load_dotenv()
 DB_NAME: Final      = os.getenv("MYSQL_DATABASE")
@@ -56,9 +56,9 @@ try:
         """
         CREATE TABLE IF NOT EXISTS titles (
             t_const VARCHAR(20) PRIMARY KEY NOT NULL,
-            title_type VARCHAR(32),
-            primary_title VARCHAR(512),
-            original_title VARCHAR(512),
+            type VARCHAR(32),
+            primary VARCHAR(512),
+            original VARCHAR(512),
             is_adult TINYINT(1),
             start_year VARCHAR(8),
             end_year VARCHAR(8),
@@ -82,7 +82,7 @@ try:
             CREATE TABLE IF NOT EXISTS directors (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 t_const VARCHAR(20) NOT NULL,
-                director VARCHAR(20) NOT NULL
+                n_const VARCHAR(20) NOT NULL
             )
         """
     )
@@ -92,7 +92,7 @@ try:
             CREATE TABLE IF NOT EXISTS writers (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 t_const VARCHAR(20) NOT NULL,
-                writer VARCHAR(20) NOT NULL
+                n_const VARCHAR(20) NOT NULL
             )
         """
     )

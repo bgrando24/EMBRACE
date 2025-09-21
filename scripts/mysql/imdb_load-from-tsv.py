@@ -7,6 +7,9 @@ from mysql.connector import Error as MySQLError
 import pandas as pd
 import numpy as np
 
+# handy thread for issues with "Loading local data is disabled; this must be enabled on both the client and server sides"
+# https://stackoverflow.com/questions/59993844/error-loading-local-data-is-disabled-this-must-be-enabled-on-both-the-client
+
 print("============================ Running 'imdb_load-from-tsv' Script ============================")
 
 load_dotenv()
@@ -85,16 +88,16 @@ try:
         FIELDS TERMINATED BY '\\t'
         LINES TERMINATED BY '\\n'
         IGNORE 1 LINES
-        (@tConst, @nConst, @writers)
-        SET t_const = CASE WHEN @tConst = '' OR @tConst = '\\N' THEN NULL ELSE @tConst END,
-            n_const = NULLIF(@nConst, '\\N')
+        (@tconst, @nconst, @writers)
+        SET t_const = CASE WHEN @tconst = '' OR @tconst = '\\N' THEN NULL ELSE @tconst END,
+            n_const = NULLIF(@nconst, '\\N')
     """
 
     curs.execute(load_directors_sql, (directors_tsv_path,))
     db.commit()
 
 except (MySQLError, FileNotFoundError) as e:
-    print(f"ERROR: Directors load failed: {e}", file=sys.stderr)
+    print(f"ERROR: 'directors' table data load failed: {e}", file=sys.stderr)
     sys.exit(1)
 
 print("\n~~~~~~~Import for table 'directors' finished\n")

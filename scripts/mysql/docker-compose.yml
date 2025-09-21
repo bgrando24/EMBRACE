@@ -9,10 +9,16 @@ services:
       - "3306:3306"
     env_file:
       - .env
+    command:
+      - mysqld
+      - --secure-file-priv=/import         # server-side loads read from here
+      - --local-infile=ON                  # keep enabled as a fallback
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
     volumes:
-    - mysql_data:/var/lib/mysql
-    - ${IMDB_DATA_DIR}:/var/lib/mysql-files
-    - ./init_scripts:/docker-entrypoint-initdb.d
+      - mysql_data:/var/lib/mysql                  # data lives in a named volume
+      - ./init_scripts:/docker-entrypoint-initdb.d # optional first-boot SQL
+      - ${IMDB_DATA_DIR}:/import:ro                # your TSVs, read-only
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$${MYSQL_ROOT_PASSWORD} || exit 1"]
       interval: 10s

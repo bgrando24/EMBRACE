@@ -11,7 +11,7 @@ from mysql.connector import Error as MySQLError
 print("============================ Running 'imdb_create-and-load' Script ============================")
 
 load_dotenv()
-# DB_NAME: Final      = os.getenv("MYSQL_DATABASE")
+DB_NAME: Final      = os.getenv("MYSQL_DATABASE")
 DB_PWD: Final       = os.getenv("MYSQL_ROOT_PASSWORD")
 DB_USER: Final      = os.getenv("MYSQL_USER")
 DB_USER_PWD: Final  = os.getenv("MYSQL_PASSWORD")
@@ -20,7 +20,7 @@ DB_PORT: Final      = os.getenv("MYSQL_PORT")
 
 # check now if any environment variable is missing, otherwise causes headaches for db connection
 required = {
-    # "MYSQL_DATABASE": DB_NAME,
+    "MYSQL_DATABASE": DB_NAME,
     "MYSQL_ROOT_PASSWORD": DB_PWD,
     "MYSQL_USER": DB_USER,
     "MYSQL_PASSWORD": DB_USER_PWD,
@@ -49,6 +49,13 @@ except MySQLError as e:
     sys.exit(1)
 
 curs: Final = db.cursor()
+
+try:
+    curs.execute(f"CREATE DATABASE IF NOT EXISTS {DB_NAME}")
+    db.commit()
+except MySQLError as e:
+    print(f"ERROR: Creating database: {e}", file=sys.stderr)
+    sys.exit(1)
 
 try:
     # titles table: titles of a given movie, TV series, or episode

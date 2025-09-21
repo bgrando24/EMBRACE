@@ -74,30 +74,55 @@ curs: Final = db.cursor()
 
 # Table 'directors': id (auto), t_const (crew), n_const (crew)
 try:
-    directors_tsv_path = os.path.expanduser("~/Documents/imdb-db/title.crew.tsv")
-    if not os.path.exists(directors_tsv_path):
-        raise FileNotFoundError(f"Directors TSV not found: {directors_tsv_path}")
-    # "When doing bulk inserts into tables with auto-increment columns, set innodb_autoinc_lock_mode to 2 (interleaved) instead of 1 (consecutive)."
-    # apparently '2' is the default value anyway?
-    # curs.execute("SET innodb_autoinc_lock_mode=2")
+    crew_tsv_path = os.path.expanduser("~/Documents/imdb-db/title.crew.tsv")  # ABSOLUTE path on the DB server
+    if not os.path.isabs(crew_tsv_path):
+        crew_tsv_path = os.path.abspath(crew_tsv_path)
+    if not os.path.exists(crew_tsv_path):
+        raise FileNotFoundError(f"Crew TSV not found on server: {crew_tsv_path}")
 
-    # Use MySQL's bulk loader so we stream data straight from the TSV instead of materializing every row in Python.
-    load_directors_sql = """
-        LOAD DATA LOCAL INFILE %s
-        INTO TABLE directors
+    # 1) Staging table mirrors the TSV columns
+    curs.execute("""
+        CREATE TABLE IF NOT EXISTS crew_staging (
+            tconst VARCHAR(12) NOT NULL,
+            directors_csv TEXT NULL,
+            writers_csv   TEXT NULL
+        ) ENGINE=InnoDB
+    """)
+    curs.execute("TRUNCATE TABLE crew_staging")
+
+    # 2) Bulk load raw TSV into staging (server-side INFILE)
+    load_stage_sql = f"""
+        LOAD DATA INFILE %s
+        INTO TABLE crew_staging
         FIELDS TERMINATED BY '\\t'
         LINES TERMINATED BY '\\n'
         IGNORE 1 LINES
-        (@tconst, @nconst, @writers)
-        SET t_const = CASE WHEN @tconst = '' OR @tconst = '\\N' THEN NULL ELSE @tconst END,
-            n_const = NULLIF(@nconst, '\\N')
+        (@tconst, @directors_csv, @writers_csv)
+        SET
+          tconst        = NULLIF(@tconst, '\\\\N'),
+          directors_csv = NULLIF(@directors_csv, '\\\\N'),
+          writers_csv   = NULLIF(@writers_csv, '\\\\N')
     """
+    curs.execute(load_stage_sql, (crew_tsv_path,))
 
-    curs.execute(load_directors_sql, (directors_tsv_path,))
+    # 3) Normalize directors into one row per person
+    curs.execute("""
+        INSERT INTO directors (t_const, n_const)
+        SELECT s.tconst,
+               jt.nconst
+        FROM crew_staging s
+        JOIN JSON_TABLE(
+            CONCAT('["', REPLACE(s.directors_csv, ',', '","'), '"]'),
+            '$[*]' COLUMNS (nconst VARCHAR(12) PATH '$')
+        ) jt
+        WHERE s.directors_csv IS NOT NULL
+              AND s.directors_csv <> ''
+    """)
+
     db.commit()
 
 except (MySQLError, FileNotFoundError) as e:
-    print(f"ERROR: 'directors' table data load failed: {e}", file=sys.stderr)
+    print(f"ERROR: crew load/normalize failed: {e}", file=sys.stderr)
     sys.exit(1)
 
 print("\n~~~~~~~Import for table 'directors' finished\n")

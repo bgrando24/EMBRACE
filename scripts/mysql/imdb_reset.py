@@ -49,7 +49,16 @@ curs: Final = db.cursor()
 
 try:
     curs.execute("USE imdb")
-    curs.execute(f"DROP DATABASE imdb")
+    # curs.execute(f"DROP DATABASE imdb")
+    curs.execute("TRUNCATE TABLE directors")
+    curs.execute("TRUNCATE TABLE episodes")
+    curs.execute("TRUNCATE TABLE genres")
+    curs.execute("TRUNCATE TABLE persons")
+    curs.execute("TRUNCATE TABLE ratings")
+    curs.execute("TRUNCATE TABLE titles")
+    curs.execute("TRUNCATE TABLE writers")
+    curs.execute("TRUNCATE TABLE roles")
+    
     db.commit()
 except MySQLError as e:
     print(f"ERROR: Unable to reset database: {e}", file=sys.stderr)

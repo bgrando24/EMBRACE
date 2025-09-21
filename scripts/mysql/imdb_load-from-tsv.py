@@ -61,93 +61,93 @@ curs: Final = db.cursor()
 
 
 # Table 'directors': id (auto), t_const (crew), n_const (crew)
-# try:
-#     # crew_tsv_path = os.path.expanduser("~/Documents/imdb-db/title.crew.tsv")
-#     crew_tsv_path = "/import/title.crew.tsv"
-#     # if not os.path.isabs(crew_tsv_path):
-#     #     crew_tsv_path = os.path.abspath(crew_tsv_path)
-#     # if not os.path.exists(crew_tsv_path):
-#     #     raise FileNotFoundError(f"Crew TSV not found on server: {crew_tsv_path}")
+try:
+    # crew_tsv_path = os.path.expanduser("~/Documents/imdb-db/title.crew.tsv")
+    crew_tsv_path = "/import/title.crew.tsv"
+    # if not os.path.isabs(crew_tsv_path):
+    #     crew_tsv_path = os.path.abspath(crew_tsv_path)
+    # if not os.path.exists(crew_tsv_path):
+    #     raise FileNotFoundError(f"Crew TSV not found on server: {crew_tsv_path}")
 
-#     # 1) Staging table mirrors the TSV columns
-#     curs.execute("""
-#         CREATE TABLE IF NOT EXISTS crew_staging (
-#             tconst VARCHAR(12) NOT NULL,
-#             directors_csv TEXT NULL,
-#             writers_csv   TEXT NULL
-#         ) ENGINE=InnoDB
-#     """)
-#     curs.execute("TRUNCATE TABLE crew_staging")
+    # 1) Staging table mirrors the TSV columns
+    curs.execute("""
+        CREATE TABLE IF NOT EXISTS crew_staging (
+            tconst VARCHAR(12) NOT NULL,
+            directors_csv TEXT NULL,
+            writers_csv   TEXT NULL
+        ) ENGINE=InnoDB
+    """)
+    curs.execute("TRUNCATE TABLE crew_staging")
 
-#     # 2) Bulk load raw TSV into staging (server-side INFILE)
-#     crew_load_stage_sql = f"""
-#         LOAD DATA INFILE %s
-#         INTO TABLE crew_staging
-#         FIELDS TERMINATED BY '\\t'
-#         LINES TERMINATED BY '\\n'
-#         IGNORE 1 LINES
-#         (@tconst, @directors_csv, @writers_csv)
-#         SET
-#           tconst        = NULLIF(@tconst, '\\\\N'),
-#           directors_csv = NULLIF(@directors_csv, '\\\\N'),
-#           writers_csv   = NULLIF(@writers_csv, '\\\\N')
-#     """
-#     curs.execute(crew_load_stage_sql, (crew_tsv_path,))
+    # 2) Bulk load raw TSV into staging (server-side INFILE)
+    crew_load_stage_sql = f"""
+        LOAD DATA INFILE %s
+        INTO TABLE crew_staging
+        FIELDS TERMINATED BY '\\t'
+        LINES TERMINATED BY '\\n'
+        IGNORE 1 LINES
+        (@tconst, @directors_csv, @writers_csv)
+        SET
+          tconst        = NULLIF(@tconst, '\\\\N'),
+          directors_csv = NULLIF(@directors_csv, '\\\\N'),
+          writers_csv   = NULLIF(@writers_csv, '\\\\N')
+    """
+    curs.execute(crew_load_stage_sql, (crew_tsv_path,))
 
-#     # 3) Normalize directors into one row per person
-#     curs.execute("""
-#         INSERT INTO directors (t_const, n_const)
-#         SELECT s.tconst,
-#                jt.nconst
-#         FROM crew_staging s
-#         JOIN JSON_TABLE(
-#             CONCAT('["', REPLACE(s.directors_csv, ',', '","'), '"]'),
-#             '$[*]' COLUMNS (nconst VARCHAR(12) PATH '$')
-#         ) jt
-#         WHERE s.directors_csv IS NOT NULL
-#               AND s.directors_csv <> ''
-#     """)
+    # 3) Normalize directors into one row per person
+    curs.execute("""
+        INSERT INTO directors (t_const, n_const)
+        SELECT s.tconst,
+               jt.nconst
+        FROM crew_staging s
+        JOIN JSON_TABLE(
+            CONCAT('["', REPLACE(s.directors_csv, ',', '","'), '"]'),
+            '$[*]' COLUMNS (nconst VARCHAR(12) PATH '$')
+        ) jt
+        WHERE s.directors_csv IS NOT NULL
+              AND s.directors_csv <> ''
+    """)
 
-#     curs.execute("SELECT COUNT(*) FROM directors")
-#     print(f"Rows in 'directors' table after data load: {curs.fetchall()}")
-#     db.commit()
+    curs.execute("SELECT COUNT(*) FROM directors")
+    print(f"Rows in 'directors' table after data load: {curs.fetchall()}")
+    db.commit()
 
-# except (MySQLError, FileNotFoundError) as e:
-#     print(f"ERROR: crew table load/normalize failed: {e}", file=sys.stderr)
-#     sys.exit(1)
+except (MySQLError, FileNotFoundError) as e:
+    print(f"ERROR: crew table load/normalize failed: {e}", file=sys.stderr)
+    sys.exit(1)
 
-# print("\n~~~~~~~Import for table 'directors' finished!\n")
+print("\n~~~~~~~Import for table 'directors' finished!\n")
 
 
-# # Table 'episodes' (episodes): t_const, parent_t_const, season_num, episode_num
-# try:
-#     episodes_tsv_path = "/import/title.episode.tsv"
+# Table 'episodes' (episodes): t_const, parent_t_const, season_num, episode_num
+try:
+    episodes_tsv_path = "/import/title.episode.tsv"
 
-#     episodes_load_stage_sql = f"""
-#             LOAD DATA INFILE %s
-#             INTO TABLE episodes
-#             FIELDS TERMINATED BY '\\t'
-#             LINES TERMINATED BY '\\n'
-#             IGNORE 1 LINES
-#             (@tconst, @parentTconst, @seasonNumber, @episodeNumber)
-#             SET
-#             t_const         = NULLIF(@tconst, '\\\\N'),
-#             parent_t_const  = NULLIF(@parentTconst, '\\\\N'),
-#             season_num      = NULLIF(@seasonNumber, '\\\\N'),
-#             episode_num     = NULLIF(@episodeNumber, '\\\\N')
-#         """
-#     curs.execute(episodes_load_stage_sql, (episodes_tsv_path,))
+    episodes_load_stage_sql = f"""
+            LOAD DATA INFILE %s
+            INTO TABLE episodes
+            FIELDS TERMINATED BY '\\t'
+            LINES TERMINATED BY '\\n'
+            IGNORE 1 LINES
+            (@tconst, @parentTconst, @seasonNumber, @episodeNumber)
+            SET
+            t_const         = NULLIF(@tconst, '\\\\N'),
+            parent_t_const  = NULLIF(@parentTconst, '\\\\N'),
+            season_num      = NULLIF(@seasonNumber, '\\\\N'),
+            episode_num     = NULLIF(@episodeNumber, '\\\\N')
+        """
+    curs.execute(episodes_load_stage_sql, (episodes_tsv_path,))
     
-#     curs.execute("SELECT COUNT(*) FROM episodes")
-#     print(f"Rows in 'episodes' table after data load: {curs.fetchall()}")
+    curs.execute("SELECT COUNT(*) FROM episodes")
+    print(f"Rows in 'episodes' table after data load: {curs.fetchall()}")
     
-#     db.commit()
+    db.commit()
 
-# except (MySQLError, FileNotFoundError) as e:
-#     print(f"ERROR: episodes table data load failed: {e}", file=sys.stderr)
-#     sys.exit(1)
+except (MySQLError, FileNotFoundError) as e:
+    print(f"ERROR: episodes table data load failed: {e}", file=sys.stderr)
+    sys.exit(1)
 
-# print("\n~~~~~~~Import for table 'episodes' finished!\n")
+print("\n~~~~~~~Import for table 'episodes' finished!\n")
 
 
 # Table 'genres' (title): id (auto), t_const, genre

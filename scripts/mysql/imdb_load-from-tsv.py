@@ -144,8 +144,8 @@ try:
             SET
             t_const         = NULLIF(@tconst, '\\\\N'),
             parent_t_const  = NULLIF(@parentTconst, '\\\\N'),
-            season_number   = NULLIF(@seasonNumber, '\\\\N'),
-            episode_number  = NULLIF(@episodeNumber, '\\\\N')
+            season_num      = NULLIF(@seasonNumber, '\\\\N'),
+            episode_num     = NULLIF(@episodeNumber, '\\\\N')
         """
     curs.execute(episodes_load_stage_sql, (episodes_tsv_path,))
 

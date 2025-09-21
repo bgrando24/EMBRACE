@@ -5,7 +5,7 @@ import sys
 import mysql.connector
 from mysql.connector import Error as MySQLError
 
-print("============================ Running 'imdb_creset' Script ============================")
+print("============================ Running 'imdb_reset' Script ============================")
 
 load_dotenv()
 DB_NAME: Final      = os.getenv("MYSQL_DATABASE")

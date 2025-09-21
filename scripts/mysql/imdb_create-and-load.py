@@ -22,8 +22,8 @@ DB_PORT: Final      = os.getenv("MYSQL_PORT")
 required = {
     "MYSQL_DATABASE": DB_NAME,
     "MYSQL_ROOT_PASSWORD": DB_PWD,
-    "MYSQL_USER": DB_USER,
-    "MYSQL_PASSWORD": DB_USER_PWD,
+    "MYSQL_USER": "root",
+    # "MYSQL_PASSWORD": DB_USER_PWD,
     "MYSQL_HOST": DB_HOST,
     "MYSQL_PORT": DB_PORT,
 }
@@ -37,7 +37,8 @@ try:
         port        = DB_PORT,
         host        = DB_HOST,
         user        = DB_USER,
-        password    = DB_USER_PWD,
+        # password    = DB_USER_PWD,
+        password    = DB_PWD,
         # database    = DB_NAME
     )
 

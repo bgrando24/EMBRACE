@@ -11,7 +11,7 @@ from mysql.connector import Error as MySQLError
 print("============================ Running 'imdb_create-and-load' Script ============================")
 
 load_dotenv()
-DB_NAME: Final      = os.getenv("MYSQL_DATABASE")
+# DB_NAME: Final      = os.getenv("MYSQL_DATABASE")
 DB_PWD: Final       = os.getenv("MYSQL_ROOT_PASSWORD")
 DB_USER: Final      = os.getenv("MYSQL_USER")
 DB_USER_PWD: Final  = os.getenv("MYSQL_PASSWORD")
@@ -20,7 +20,7 @@ DB_PORT: Final      = os.getenv("MYSQL_PORT")
 
 # check now if any environment variable is missing, otherwise causes headaches for db connection
 required = {
-    "MYSQL_DATABASE": DB_NAME,
+    # "MYSQL_DATABASE": DB_NAME,
     "MYSQL_ROOT_PASSWORD": DB_PWD,
     "MYSQL_USER": DB_USER,
     "MYSQL_PASSWORD": DB_USER_PWD,
@@ -38,7 +38,7 @@ try:
         host        = DB_HOST,
         user        = DB_USER,
         password    = DB_USER_PWD,
-        database    = DB_NAME
+        # database    = DB_NAME
     )
 
     if not db.connection_id:

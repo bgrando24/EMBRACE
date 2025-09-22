@@ -6,11 +6,21 @@ import os
 import sys
 import mysql.connector
 from mysql.connector import Error as MySQLError
-import pandas as pd
-import numpy as np
+import time
+from contextlib import contextmanager   # docs: https://docs.python.org/3/library/contextlib.html#contextlib.contextmanager
 
-# handy thread for issues with "Loading local data is disabled; this must be enabled on both the client and server sides"
-# https://stackoverflow.com/questions/59993844/error-loading-local-data-is-disabled-this-must-be-enabled-on-both-the-client
+# @contextmanager
+# def some_context_func():
+#     # --- setup ---
+#     print("Setting things up")
+    
+#     yield   # hand control to the code inside the `with` block
+    
+#     # --- teardown ---
+#     print("Cleaning things up")
+
+
+NS_IN_SEC: Final = 1000000000   # probably not necessary to declare as a dedicated constant but helps reduce 'magic numbers'
 
 print("\n============================ Running 'imdb_load-from-tsv' Script ============================\n")
 
@@ -54,20 +64,18 @@ except MySQLError as e:
     sys.exit(1)
 
 curs: Final = db.cursor()
+    
 
 # below lists what columns each table actually needs, and from what source
 # general process is to extract the required columns from the files, then use them in SQL inserts
 # https://dev.mysql.com/doc/refman/8.4/en/optimizing-innodb-bulk-data-loading.html
 
 
-# Table 'directors': id (auto), t_const (crew), n_const (crew)
+# ------------------ Table 'directors': id (auto), t_const (crew), n_const (crew)
 try:
-    # crew_tsv_path = os.path.expanduser("~/Documents/imdb-db/title.crew.tsv")
+    directors_timer_start = time.perf_counter_ns()
+    
     crew_tsv_path = "/import/title.crew.tsv"
-    # if not os.path.isabs(crew_tsv_path):
-    #     crew_tsv_path = os.path.abspath(crew_tsv_path)
-    # if not os.path.exists(crew_tsv_path):
-    #     raise FileNotFoundError(f"Crew TSV not found on server: {crew_tsv_path}")
 
     # 1) Staging table mirrors the TSV columns
     curs.execute("""
@@ -113,14 +121,23 @@ try:
     db.commit()
 
 except (MySQLError, FileNotFoundError) as e:
-    print(f"ERROR: crew table load/normalize failed: {e}", file=sys.stderr)
+    print(f"ERROR: directors table data load failed: {e}", file=sys.stderr)
     sys.exit(1)
 
 print("\n~~~~~~~Import for table 'directors' finished!\n")
 
+directors_timer_end = time.perf_counter_ns()
+print(
+        f"""Data load for table 'directors' took {directors_timer_end - directors_timer_start}ns,\n\t
+        or {round((directors_timer_end - directors_timer_start)/NS_IN_SEC, 2)} seconds"""
+    )
 
-# Table 'episodes' (episodes): t_const, parent_t_const, season_num, episode_num
+
+
+# ------------------ Table 'episodes' (episodes): t_const, parent_t_const, season_num, episode_num
 try:
+    episodes_timer_start = time.perf_counter_ns()
+    
     episodes_tsv_path = "/import/title.episode.tsv"
 
     episodes_load_stage_sql = f"""
@@ -148,10 +165,18 @@ except (MySQLError, FileNotFoundError) as e:
     sys.exit(1)
 
 print("\n~~~~~~~Import for table 'episodes' finished!\n")
+episodes_timer_end = time.perf_counter_ns()
+print(
+        f"""Data load for table 'episodes' took {episodes_timer_end - episodes_timer_start}ns,\n\t
+        or {round((episodes_timer_end - episodes_timer_start)/NS_IN_SEC, 2)} seconds"""
+    )
 
 
-# Table 'genres' (title): id (auto), t_const, genre
+
+# ------------------ Table 'genres' (title): id (auto), t_const, genre
 try:
+    genres_timer_start = time.perf_counter_ns()
+    
     basics_tsv_path = "/import/title.basics.tsv"
 
     # 1) staging table mirrors the TSV columns
@@ -201,16 +226,28 @@ except (MySQLError, FileNotFoundError) as e:
     sys.exit(1)
 
 print("\n~~~~~~~Import for table 'genres' finished!\n")
+genres_timer_end = time.perf_counter_ns()
+print(
+        f"""Data load for table 'genres' took {genres_timer_end - genres_timer_start}ns,\n\t
+        or {round((genres_timer_end - genres_timer_start)/NS_IN_SEC, 2)} seconds"""
+    )
 
-# Table 'persons' (name): n_const, name, birth_year, death_year
 
-# Table 'ratings' (ratings): t_const, avg_rating, num_votes
 
-# Table 'titles' (title): t_const, type, primary, original, is_adult, start_year, end_year, runtime_minutes
+# ------------------ Table 'persons' (name): n_const, name, birth_year, death_year
+# try: 
 
-# Table 'writers' (crew): id (auto), t_const, n_const
 
-# Table 'roles' (principals): id (auto), t_const, n_const, category, job, characters (array?)
+
+
+
+# ------------------ Table 'ratings' (ratings): t_const, avg_rating, num_votes
+
+# ------------------ Table 'titles' (title): t_const, type, primary, original, is_adult, start_year, end_year, runtime_minutes
+
+# ------------------ Table 'writers' (crew): id (auto), t_const, n_const
+
+# ------------------ Table 'roles' (principals): id (auto), t_const, n_const, category, job, characters (array?)
 
 
 

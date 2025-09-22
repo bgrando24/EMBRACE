@@ -9,18 +9,25 @@ from mysql.connector import Error as MySQLError
 import time
 from contextlib import contextmanager   # docs: https://docs.python.org/3/library/contextlib.html#contextlib.contextmanager
 
-# @contextmanager
-# def some_context_func():
-#     # --- setup ---
-#     print("Setting things up")
-    
-#     yield   # hand control to the code inside the `with` block
-    
-#     # --- teardown ---
-#     print("Cleaning things up")
+# helper context manager to standardise performance timing and print statements for table data loads
+@contextmanager
+def run_table_data_load(tbl_name: str):
+    try:
+        table_perf_start = time.perf_counter_ns()
+        print(f"\n~~~~~~~Starting import for table '{tbl_name}'...\n")
+        yield
+    except (MySQLError, Exception) as e:
+        print(f"ERROR: {tbl_name} table data load failed: {e}", file=sys.stderr)
+        sys.exit(1)
 
+    print(f"\n~~~~~~~Import for table '{tbl_name}' finished!\n")
 
-NS_IN_SEC: Final = 1000000000   # probably not necessary to declare as a dedicated constant but helps reduce 'magic numbers'
+    table_perf_end = time.perf_counter_ns()
+    print(
+            f"""Data load for table '{tbl_name}' took {table_perf_end - table_perf_start}ns,\n\t
+            or {round((table_perf_end - table_perf_start)/1000000000, 2)} seconds"""
+        )
+
 
 print("\n============================ Running 'imdb_load-from-tsv' Script ============================\n")
 
@@ -72,8 +79,7 @@ curs: Final = db.cursor()
 
 
 # ------------------ Table 'directors': id (auto), t_const (crew), n_const (crew)
-try:
-    directors_timer_start = time.perf_counter_ns()
+with run_table_data_load("directors"):
     
     crew_tsv_path = "/import/title.crew.tsv"
 
@@ -120,22 +126,10 @@ try:
     print(f"Rows in 'directors' table after data load: {curs.fetchall()}")
     db.commit()
 
-except (MySQLError, FileNotFoundError) as e:
-    print(f"ERROR: directors table data load failed: {e}", file=sys.stderr)
-    sys.exit(1)
-
-print("\n~~~~~~~Import for table 'directors' finished!\n")
-
-directors_timer_end = time.perf_counter_ns()
-print(
-        f"""Data load for table 'directors' took {directors_timer_end - directors_timer_start}ns,\n\t
-        or {round((directors_timer_end - directors_timer_start)/NS_IN_SEC, 2)} seconds"""
-    )
-
 
 
 # ------------------ Table 'episodes' (episodes): t_const, parent_t_const, season_num, episode_num
-try:
+with run_table_data_load("episodes"):
     episodes_timer_start = time.perf_counter_ns()
     
     episodes_tsv_path = "/import/title.episode.tsv"
@@ -160,21 +154,9 @@ try:
     
     db.commit()
 
-except (MySQLError, FileNotFoundError) as e:
-    print(f"ERROR: episodes table data load failed: {e}", file=sys.stderr)
-    sys.exit(1)
-
-print("\n~~~~~~~Import for table 'episodes' finished!\n")
-episodes_timer_end = time.perf_counter_ns()
-print(
-        f"""Data load for table 'episodes' took {episodes_timer_end - episodes_timer_start}ns,\n\t
-        or {round((episodes_timer_end - episodes_timer_start)/NS_IN_SEC, 2)} seconds"""
-    )
-
-
 
 # ------------------ Table 'genres' (title): id (auto), t_const, genre
-try:
+with run_table_data_load("genres"):
     genres_timer_start = time.perf_counter_ns()
     
     basics_tsv_path = "/import/title.basics.tsv"
@@ -221,23 +203,10 @@ try:
     
     db.commit()
 
-except (MySQLError, FileNotFoundError) as e:
-    print(f"ERROR: genres table data load failed: {e}", file=sys.stderr)
-    sys.exit(1)
-
-print("\n~~~~~~~Import for table 'genres' finished!\n")
-genres_timer_end = time.perf_counter_ns()
-print(
-        f"""Data load for table 'genres' took {genres_timer_end - genres_timer_start}ns,\n\t
-        or {round((genres_timer_end - genres_timer_start)/NS_IN_SEC, 2)} seconds"""
-    )
-
 
 
 # ------------------ Table 'persons' (name): n_const, name, birth_year, death_year
-# try: 
-
-
+# with run_table_data_load("persons"):
 
 
 

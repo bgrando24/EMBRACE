@@ -52,7 +52,7 @@ with run_table_data_load("directors"):
             tconst VARCHAR(12) NOT NULL,
             directors_csv TEXT NULL,
             writers_csv   TEXT NULL
-        ) ENGINE=Innosql.db
+        ) ENGINE=InnoDB
     """)
     sql.curs.execute("TRUNCATE TABLE crew_staging")
 
@@ -125,7 +125,7 @@ with run_table_data_load("genres"):
         CREATE TABLE IF NOT EXISTS genres_staging (
             tconst VARCHAR(12) NOT NULL,
             genres TEXT NULL
-        ) ENGINE=Innosql.db
+        ) ENGINE=InnoDB
     """)
     sql.curs.execute("TRUNCATE TABLE genres_staging")
 

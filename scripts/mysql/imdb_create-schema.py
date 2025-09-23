@@ -1,13 +1,11 @@
 # creates the imdb database and loads in the data from TSV files: https://developer.imdb.com/non-commercial-datasets/
 # remember to add the file path for where the SQLite database should be stored -> pick somewhere with enough space and fast reads if possible
-
-from typing import Final
-from dotenv import load_dotenv
-import os
 import sys
-import mysql.connector
 from mysql.connector import Error as MySQLError
-from src.mysql_connector import MySQLConnector
+# add project root (parent of 'scripts') to sys.path so 'src' is importable
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from connectors import MySQLConnector
 
 print("============================ Running 'imdb_create-and-load' Script ============================")
 

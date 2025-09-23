@@ -3,3 +3,5 @@
 /src/__pycache__
 /sqlite_db/*
 /site
+/src/connectors/__pycache__
+/src/embrace.egg-info

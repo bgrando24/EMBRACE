@@ -39,10 +39,3 @@ WHERE
 ORDER BY
     TABLE_ROWS DESC;
 ```
-
-
-While that's running, let me give you some context about this database. 
-
-So, the whole reason for me loading in the imdb data into a dedicated database is I am working on building a movie/tv show recommendation service, as a personal hobby project. The idea for an initial MVP is to build a k-NN model using the genres of a given media item, then provide recommendations based on an input media item (movie or tv show) by finding its vector, and then finding the nearest neighbours.
-
-I wanted a large set of movies and tv shows, as well as a rich collection of genre tags for each media item, which thankfully the IMDB dataset has up to 3 genre tags for a given title. The idea was I was going to 

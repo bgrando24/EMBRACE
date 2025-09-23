@@ -41,6 +41,8 @@ class MySQLConnector:
             if not env_file.is_absolute():
                 # project root = parent of 'src' (this file lives in src/)
                 project_root = Path(__file__).resolve().parents[1]
+                # project root = parent of 'src' (this file lives in src/connectors/)
+                project_root = Path(__file__).resolve().parents[2]
                 env_file = project_root / env_file
 
             if env_file.is_dir():

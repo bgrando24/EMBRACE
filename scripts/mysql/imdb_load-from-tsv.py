@@ -4,7 +4,7 @@ from mysql.connector import Error as MySQLError
 import time
 from contextlib import contextmanager   # docs: https://docs.python.org/3/library/contextlib.html#contextlib.contextmanager
 
-from src.mysql_connector import MySQLConnector
+from connectors.mysql_connector import MySQLConnector
 
 # helper context manager to standardise performance timing and print statements for table data loads
 @contextmanager
@@ -210,7 +210,7 @@ with run_table_data_load("ratings"):
 
 
 
-# ------------------ Table 'titles' (title): t_const, type, primary, original, is_adult, start_year, end_year, runtime_minutes
+# ------------------ Table 'titles' (title): t_const, type, primary_name, original_name, is_adult, start_year, end_year, runtime_minutes
 with run_table_data_load("titles"):
     basics_tsv_path = "/import/title.basics.tsv"
 

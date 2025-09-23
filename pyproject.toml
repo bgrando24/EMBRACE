@@ -6,4 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "embrace"
 version = "0.0.1"
 requires-python = ">=3.11"
-dependencies = []
+dynamic = ["dependencies"]  # read deps dynamically
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }

@@ -49,6 +49,7 @@ curs: Final = db.cursor()
 
 try:
     curs.execute("USE imdb")
+    print(curs.fetchall())
     db.commit()
     curs.execute("SELECT @@hostname, @@port, @@version, CURRENT_USER(), DATABASE()")
     print("Connected to:", curs.fetchone())
@@ -64,6 +65,8 @@ try:
     curs.execute("TRUNCATE TABLE titles")
     curs.execute("TRUNCATE TABLE writers")
     curs.execute("TRUNCATE TABLE roles")
+
+    print(f"Response after truncate queries: {curs.fetchall()}")
     
     db.commit()
 except MySQLError as e:

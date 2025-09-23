@@ -5,3 +5,5 @@
 /site
 /src/connectors/__pycache__
 /src/embrace.egg-info
+/src/ml/__pycache__
+/data

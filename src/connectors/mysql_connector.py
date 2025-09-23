@@ -75,12 +75,12 @@ class MySQLConnector:
         try:
             # https://dev.mysql.com/doc/connector-python/en/connector-python-connectargs.html
             self.db = mysql.connector.connect(
-                port        = DB_PORT,
-                host        = DB_HOST,
-                user        = DB_USER,
-                password    = DB_USER_PWD,
-                database    = DB_NAME,
-                allow_local_infile=True,
+                port                = DB_PORT,
+                host                = DB_HOST,
+                user                = DB_USER,
+                password            = DB_USER_PWD,
+                database            = DB_NAME,
+                allow_local_infile  =True,
             )
 
             if not self.db.connection_id:
@@ -92,3 +92,4 @@ class MySQLConnector:
 
         self.curs: Final = self.db.cursor()
         self._DB_NAME: Final = DB_NAME
+        print("\n[MySQLConnector] Database connected!\n")

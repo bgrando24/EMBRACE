@@ -26,8 +26,8 @@ def run_table_data_load(tbl_name: str):
 
     table_perf_end = time.perf_counter_ns()
     print(
-            f"""Data load for table '{tbl_name}' took {table_perf_end - table_perf_start}ns,\n\t
-            or {round((table_perf_end - table_perf_start)/1000000000, 2)} seconds"""
+            f"""Data load for table '{tbl_name}' took {table_perf_end - table_perf_start}ns,
+                or {round((table_perf_end - table_perf_start)/1000000000, 2)} seconds"""
         )
 
 

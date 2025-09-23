@@ -47,6 +47,11 @@ except MySQLError as e:
 
 curs: Final = db.cursor()
 
+tables = [
+    "crew_staging", "genres_staging", "directors", "episodes",
+    "genres", "persons", "ratings", "titles", "writers", "roles",
+]
+
 try:
     curs.execute("USE imdb")
     print(curs.fetchall())
@@ -71,24 +76,18 @@ try:
     db.commit()
 
     # forces refresh of stale row counts
-    curs.execute("ANALYZE TABLE crew_staging, genres_staging, directors, episodes, genres, persons, ratings, titles, writers, roles;")
-    print(f"{curs.fetchall()}\n\n")
-    db.commit()
-
     curs.execute("""
-        SELECT crew_staging table, COUNT(*) row_count FROM crew_staging
-        UNION ALL SELECT genres_staging, COUNT(*) FROM genres_staging
-        UNION ALL SELECT directors, COUNT(*) FROM directors
-        UNION ALL SELECT episodes, COUNT(*) FROM episodes
-        UNION ALL SELECT genres, COUNT(*) FROM genres
-        UNION ALL SELECT persons, COUNT(*) FROM persons
-        UNION ALL SELECT ratings, COUNT(*) FROM ratings
-        UNION ALL SELECT titles, COUNT(*) FROM titles
-        UNION ALL SELECT writers, COUNT(*) FROM writers
-        UNION ALL SELECT roles, COUNT(*) FROM roles
+    ANALYZE TABLE crew_staging, genres_staging, directors, episodes,
+                genres, persons, ratings, titles, writers, roles
     """)
-    print(f"{curs.fetchall()}\n\n")
-    db.commit()
+    _ = curs.fetchall()  # consume result set
+
+    # verify tables showing zero rows
+    for t in tables:
+        curs.execute(f"SELECT COUNT(*) FROM {t}")
+        cnt = curs.fetchone()[0]
+        print(f"{t:16s}: {cnt}")
+        db.commit()
 except MySQLError as e:
     print(f"ERROR: Unable to reset database: {e}", file=sys.stderr)
     sys.exit(1)

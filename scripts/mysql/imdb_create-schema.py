@@ -123,7 +123,7 @@ try:
                 t_const VARCHAR(20) NOT NULL,
                 n_const VARCHAR(20) NOT NULL,
                 category VARCHAR(64),
-                job VARCHAR(128),
+                job VARCHAR(500),
                 characters TEXT
             )
         """

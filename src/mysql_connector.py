@@ -4,12 +4,51 @@ import os
 import sys
 import mysql.connector
 from mysql.connector import Error as MySQLError
+from pathlib import Path
 
 # helper class to manage connection to, and functionality for, the EMBRACE mysql database
 class MySQLConnector:
 
-    def __init__(self):
-        load_dotenv()
+    tables = [
+    "crew_staging", "genres_staging", "directors", "episodes",
+    "genres", "persons", "ratings", "titles", "writers", "roles",
+    ]
+
+    def __init__(self, env_path: str | os.PathLike[str] | None = None):
+        """
+        Args:
+            env_path (optional): path to a .env file, or a directory containing a .env file.
+                - Absolute paths are used as-is.
+                - Relative paths are resolved against the project root (parent of 'src').
+                - If None, python-dotenv will search from the current working directory upward.
+        ---
+        ### Example of using project-root relative path:
+            ```
+            from src.mysql_connector import MySQLConnector
+            sql = MySQLConnector(env_path="scripts/mysql/.env")
+            ```
+        ---
+        ### Example of using absolute pathing:
+            ```
+            from src.mysql_connector import MySQLConnector
+            sql = MySQLConnector(env_path="[path to repo]/scripts/mysql/.env")
+            ```
+        """
+        if env_path is None:
+            load_dotenv()
+        else:
+            env_file = Path(env_path).expanduser()
+            if not env_file.is_absolute():
+                # project root = parent of 'src' (this file lives in src/)
+                project_root = Path(__file__).resolve().parents[1]
+                env_file = project_root / env_file
+
+            if env_file.is_dir():
+                env_file = env_file / ".env"
+            if not env_file.exists():
+                raise FileNotFoundError(f".env file not found at: {env_file}")
+
+            load_dotenv(dotenv_path=env_file)
         
         DB_NAME: Final      = os.getenv("MYSQL_DATABASE")
         DB_PWD: Final       = os.getenv("MYSQL_ROOT_PASSWORD")
@@ -50,3 +89,4 @@ class MySQLConnector:
             sys.exit(1)
 
         self.curs: Final = self.db.cursor()
+        self._DB_NAME: Final = DB_NAME

@@ -7,60 +7,23 @@ import os
 import sys
 import mysql.connector
 from mysql.connector import Error as MySQLError
+from src.mysql_connector import MySQLConnector
 
 print("============================ Running 'imdb_create-and-load' Script ============================")
 
-load_dotenv()
-DB_NAME: Final      = os.getenv("MYSQL_DATABASE")
-DB_PWD: Final       = os.getenv("MYSQL_ROOT_PASSWORD")
-DB_USER: Final      = os.getenv("MYSQL_USER")
-DB_USER_PWD: Final  = os.getenv("MYSQL_PASSWORD")
-DB_HOST: Final      = os.getenv("MYSQL_HOST")
-DB_PORT: Final      = os.getenv("MYSQL_PORT")
-
-# check now if any environment variable is missing, otherwise causes headaches for db connection
-required = {
-    "MYSQL_DATABASE": DB_NAME,
-    "MYSQL_ROOT_PASSWORD": DB_PWD,
-    "MYSQL_USER": DB_USER,
-    "MYSQL_PASSWORD": DB_USER_PWD,
-    "MYSQL_HOST": DB_HOST,
-    "MYSQL_PORT": DB_PORT,
-}
-missing = [k for k, v in required.items() if v in (None, "")]
-if missing:
-    raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")
+sql = MySQLConnector("scripts/mysql/.env")
 
 try:
-    # https://dev.mysql.com/doc/connector-python/en/connector-python-connectargs.html
-    db = mysql.connector.connect(
-        port        = DB_PORT,
-        host        = DB_HOST,
-        user        = DB_USER,
-        password    = DB_USER_PWD,
-        # database    = DB_NAME
-    )
-
-    if not db.connection_id:
-        raise RuntimeError(f"Error with database connection object, current object: {db}")
-    
-except MySQLError as e:
-    print(f"ERROR: Database connection failed: {e}", file=sys.stderr)
-    sys.exit(1)
-
-curs: Final = db.cursor()
-
-try:
-    curs.execute(f"CREATE DATABASE IF NOT EXISTS {DB_NAME}")
-    curs.execute("USE imdb")
-    db.commit()
+    sql.curs.execute(f"CREATE DATABASE IF NOT EXISTS {sql._DB_NAME}")
+    sql.curs.execute("USE imdb")
+    sql.db.commit()
 except MySQLError as e:
     print(f"ERROR: Creating database: {e}", file=sys.stderr)
     sys.exit(1)
 
 try:
     # titles table: titles of a given movie, TV series, or episode
-    curs.execute(
+    sql.curs.execute(
         """
         CREATE TABLE IF NOT EXISTS titles (
             t_const VARCHAR(20) PRIMARY KEY NOT NULL,
@@ -75,7 +38,7 @@ try:
         """
     )
     # genres table: stores the one-to-many relationship between a title and its genres
-    curs.execute(
+    sql.curs.execute(
         """
             CREATE TABLE IF NOT EXISTS genres (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -85,7 +48,7 @@ try:
         """
     )
     # directors table: stores the one-to-many relationship between a title and its directors
-    curs.execute(
+    sql.curs.execute(
         """
             CREATE TABLE IF NOT EXISTS directors (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -95,7 +58,7 @@ try:
         """
     )
     # writers table: stores the one-to-many relationship between a title and the featured writers
-    curs.execute(
+    sql.curs.execute(
         """
             CREATE TABLE IF NOT EXISTS writers (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -105,7 +68,7 @@ try:
         """
     )
     # episodes table: individual episodes of a TV series
-    curs.execute(
+    sql.curs.execute(
         """
             CREATE TABLE IF NOT EXISTS episodes (
                 t_const VARCHAR(20) PRIMARY KEY NOT NULL,
@@ -116,7 +79,7 @@ try:
         """
     )
     # roles table: the individual roles of cast/crew for a given title item
-    curs.execute(
+    sql.curs.execute(
         """
             CREATE TABLE IF NOT EXISTS roles (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -129,7 +92,7 @@ try:
         """
     )
     # ratings table: self-explanatory
-    curs.execute(
+    sql.curs.execute(
         """
             CREATE TABLE IF NOT EXISTS ratings (
                 t_const VARCHAR(20) PRIMARY KEY NOT NULL,
@@ -139,7 +102,7 @@ try:
         """
     )
     # persons table: basic details for individual people referenced in other tables 
-    curs.execute(
+    sql.curs.execute(
         """
             CREATE TABLE IF NOT EXISTS persons (
                 n_const VARCHAR(20) PRIMARY KEY NOT NULL,
@@ -150,12 +113,12 @@ try:
         """
     )
      
-    db.commit()
+    sql.db.commit()
     
     # double-check tables exist
-    curs.execute("SHOW TABLES")
-    print(f"Tables in database: \n{curs.fetchall()}")
-    db.commit()
+    sql.curs.execute("SHOW TABLES")
+    print(f"Tables in database: \n{sql.curs.fetchall()}")
+    sql.db.commit()
     
 except MySQLError as e:
     print(f"ERROR: Creating tables failed: {e}", file=sys.stderr)

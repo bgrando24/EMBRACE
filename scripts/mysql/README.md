@@ -11,7 +11,7 @@ docker compose logs -f db   # optional
 docker compose down 
 ```
 
-## Notes
+## Using `tmux` for data load over SSH
 
 * Running TSV data loads over SSH can sometimes run into issues with SSH session breaking while waiting for script to finish
 * recommend using `tmux` on the host machine to help prevent broken SSH killing the script process too

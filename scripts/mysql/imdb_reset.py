@@ -69,6 +69,11 @@ try:
     print(f"Response after truncate queries: {curs.fetchall()}")
     
     db.commit()
+
+    # forces refresh of stale row counts
+    curs.execute("ANALYZE TABLE crew_staging, genres_staging, directors, episodes, genres, persons, ratings, titles, writers, roles;")
+    print(curs.fetchall())
+    db.commit()
 except MySQLError as e:
     print(f"ERROR: Unable to reset database: {e}", file=sys.stderr)
     sys.exit(1)

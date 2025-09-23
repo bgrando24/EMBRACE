@@ -21,7 +21,7 @@ tmux new -s imdb            # open new tmux session called 'imdb'
 python3 script_name.py      # run the python script INSIDE tmux
 Ctrl + b   then   d         # this detaches from the tmux session WITHOUT killing it
 tmux ls                     # if you forget the tmux session name
-tmux attach -t imdb_load    # reconnect to tmux session
+tmux attach -t imdb         # reconnect to tmux session
 ```
 
 

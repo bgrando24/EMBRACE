@@ -49,7 +49,13 @@ curs: Final = db.cursor()
 
 try:
     curs.execute("USE imdb")
+    db.commit()
+    curs.execute("SELECT @@hostname, @@port, @@version, CURRENT_USER(), DATABASE()")
+    print("Connected to:", curs.fetchone())
+    db.commit()
     # curs.execute(f"DROP DATABASE imdb")
+    curs.execute("TRUNCATE TABLE crew_staging")
+    curs.execute("TRUNCATE genres_staging")
     curs.execute("TRUNCATE TABLE directors")
     curs.execute("TRUNCATE TABLE episodes")
     curs.execute("TRUNCATE TABLE genres")

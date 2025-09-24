@@ -1,112 +1,89 @@
-# SQLite Database Documentation
+# SQLite Database Reference
 
-### User watch history schemas
+The project stores its operational state in a SQLite database that lives under `sqlite_db/`. All schemas are created and maintained by `SQLiteConnector`; no manual migrations are required. The connector will automatically create the database directory, initialize the tables, and keep library metadata in sync as Emby changes over time.
 
-Data relevant to a user's watch history.
+## Library metadata tables
 
-#### `watch_hist_raw_events` table
+### `library_items`
 
--   `row_id` - UUID for each event (auto-incremented)
--   `date` - Date of event, **NOTE: UTC+10, Australia/Melbourne timezone**
--   `time` - Time of event, **NOTE: UTC+10, Australia/Melbourne timezone**
--   `user_id` - Emby's ID for the user
--   `item_name` - Name of item
--   `item_id` - Emby's ID for the item
--   `item_type` - Type of the item (Movie, Episode)
--   `duration` - Duration of the watch event (in seconds)
--   `remote_address` - IP address of the user's device (optional)
--   `user_name` - User's Emby username
+Central catalogue of every Movie and Episode imported from Emby. Each row contains:
 
-#### `watch_hist_agg_sessions` table
+- **Identity**: `item_id` (primary key), `item_type`, `item_name`.
+- **Series context**: `series_id`, `series_name`, `season_number`, `episode_number` for episodic content.
+- **Runtime and chronology**: `runtime_ticks` (with generated seconds/minutes columns), `premiere_date`, and `date_created`.
+- **Descriptive metadata**: `overview`, `community_rating`, `production_year`.
+- **File attributes**: `file_path`, `container`, `video_codec`, `resolution_width`, `resolution_height`.
+- **Timestamps**: `last_updated` auto-populates whenever the row is refreshed.
 
--   `session_id` - Unique identifier for each session (auto-incremented)
--   `user_id` - Emby's ID for the user
--   `item_id` - Emby's ID for the item
--   `item_name` - Name of watched item
--   `item_type` - Type of the item (Movie, Episode)
--   `session_start_timestamp` - First event timestamp
--   `session_end_timestamp` - Last event timestamp
--   `session_duration_minutes` - session_duration_minutes = session_end_timestamp - session_start_timestamp
--   `total_seconds_watched` - Total seconds watched in the session
--   `session_count` - Number of raw events in 'this' session
--   `completion_ratio` - completion_ratio = total_seconds_watched / actual_runtime_seconds
--   `outcome` - Outcome or status of the session
-    -   **Outcome Classification:**
-        -   **sampled**: less than 30 seconds total watched
-        -   **abandoned**: less than 20% completion and more than 5 minutes watched
-        -   **partial**: 20–80% completion
-        -   **completed**: 80% or greater completion
--   `created_timestamp` - Timestamp when the session record was created (defaults to current time)
--   `UNIQUE(user_id, item_id, DATE(session_start_timestamp))` - Ensures uniqueness for user, item, and date combinations
+Indexes (`idx_library_series`, `idx_library_type`, `idx_series_season_ep`, `idx_library_name`, `idx_library_year`) keep lookups responsive for common filtering patterns.
 
-#### `watch_hist_user_item_stats` table
+### `item_genres`
 
--   `stat_id` - Unique identifier for each user-item stat record (auto-incremented)
--   `user_id` - Emby's ID for the user
--   `item_id` - Emby's ID for the item
--   `item_name` - Name of watched item
--   `item_type` - Type of the item (Movie, Episode)
--   `total_sessions` - Total number of viewing sessions for this user-item pair
--   `total_seconds_watched` - Cumulative seconds watched across all sessions
--   `total_minutes_watched` - Auto-calculated field (total_seconds_watched / 60.0)
--   `best_completion_ratio` - Highest completion percentage achieved in any single session
--   `average_completion_ratio` - Average completion percentage across all sessions
--   `rewatch_count` - Number of sessions beyond the first (total_sessions - 1)
--   `first_watched_timestamp` - Timestamp of the user's first viewing session
--   `last_watched_timestamp` - Timestamp of the user's most recent viewing session
--   `days_between_first_last` - Auto-calculated days between first and last watch (0 if same day)
--   `adherence_score` - Computed preference strength score (0.0 - 1.0 range)
--   `completed_sessions` - Count of sessions with 'completed' outcome
--   `partial_sessions` - Count of sessions with 'partial' outcome
--   `abandoned_sessions` - Count of sessions with 'abandoned' outcome
--   `sampled_sessions` - Count of sessions with 'sampled' outcome
--   `last_updated_timestamp` - Timestamp when this record was last modified (defaults to current time)
--   `UNIQUE(user_id, item_id)` - Ensures one record per user-item combination
+A many-to-many bridge that stores the genre tags attached to each library item. Genres sourced directly from Emby retain their numeric IDs; otherwise a deterministic CRC32-derived ID is generated so joins remain stable across runs.
 
-**Key Relationships:**
+### `item_tags`
 
--   Aggregates data from multiple records in `watch_hist_agg_sessions`
--   One record per unique user-item pair across all time
--   Updated whenever new sessions are processed for the user-item combination
+Stores free-form tag labels (e.g., “Kids”, “4K”) associated with a library item. Tags can originate from Emby’s `TagItems` collection or the fallback `Tags` array. A composite primary key (`item_id`, `tag_id`) prevents duplicates.
 
-### SQLite Indexes
+### `item_provider_ids`
 
-#### `idx_watch_hist_raw_user_time`
+Normalises the `ProviderIds` payload emitted by Emby. Each row captures a provider namespace (TMDB, IMDB, TVDB, etc.) alongside the provider-specific identifier so you can map items back to external datasets. Records are refreshed on every ingest, and rows belonging to media removed from Emby are pruned automatically.
 
-**Table:** `watch_hist_raw_events`  
-**Columns:** `(user_id, date, time DESC)`  
-**Purpose:** Optimizes queries for user-specific watch history ordered by time  
-**Common Use Cases:**
+## TMDB reference tables
 
--   Fetching recent watch events for a user
--   Building user timelines
--   Incremental data processing (get events since last sync)
+`SQLiteConnector._INIT_create_tmdb_schemas()` provisions two lookup tables:
 
-#### `idx_watch_hist_agg_sessions`
+- `tmdb_movie_genres`
+- `tmdb_tv_genres`
 
-**Table:** `watch_hist_agg_sessions`  
-**Columns:** `(user_id, session_end_timestamp DESC)`  
-**Purpose:** Speeds up user session queries sorted by recency  
-**Common Use Cases:**
+Populate them with `SQLiteConnector.ingest_tmdb_movie_tv_genres(...)` so `item_genres` can map Emby names to canonical TMDB IDs. When a genre label is missing from the TMDB response, the connector falls back to the deterministic hash strategy described above.
 
--   "Continue watching" functionality
--   Recent activity feeds
--   User session analysis and patterns
+## Watch history tables
 
-#### `idx_watch_hist_user_item_stats`
+The watch-history pipeline converts raw Emby playback events into progressively richer aggregates.
 
-**Table:** `watch_hist_user_item_stats`  
-**Columns:** `(user_id, adherence_score DESC)`  
-**Purpose:** Optimizes queries for user's top-rated/most-watched content  
-**Common Use Cases:**
+### `watch_hist_raw_events`
 
--   Building user taste profiles
--   Finding user's favorite content
--   Recommendation engine input (top adherence items)
--   User preference analysis
+Snapshot of Emby’s playback reporting API. Each row stores the recorded `date` and `time` (normalised to Australia/Melbourne time for pre-August 2025 entries), the `user_id`, `user_name`, `item_id`, `item_name`, `item_type`, playback `duration`, and optional `remote_address` metadata.
 
-**Note:** All indexes include `IF NOT EXISTS` to prevent errors during schema recreation.
+### `watch_hist_agg_sessions`
 
----
+Aggregates raw events into contiguous sessions. Key fields include:
 
-</br></br>
+- `session_start_timestamp` / `session_end_timestamp`
+- `session_span_minutes` and `total_seconds_watched`
+- `session_count` (number of underlying raw events)
+- `completion_ratio` (capped at 1.0 once runtime metadata is available)
+- `outcome` classification (`sampled`, `abandoned`, `partial`, `completed`)
+
+Uniqueness is enforced per `(user_id, item_id, session_start_timestamp)` and each row links back to `library_items` via `item_id`.
+
+### `watch_hist_user_item_stats`
+
+Derived statistics summarising a user’s relationship with a specific item. Generated columns (e.g., `total_minutes_watched`, `days_between_first_last`) and counters (`completed_sessions`, `rewatch_count`, `adherence_score`) are recalculated every time `_INIT_POPULATE_watch_hist_user_item_stats()` runs. The table is keyed by `user_id` + `item_id` and also links to `library_items` for runtime-aware metrics.
+
+## Watch history processing pipeline
+
+Run the following steps—typically in this order—to refresh watch history:
+
+1. **Library ingest** (`ingest_all_library_items`): Populate `library_items`, `item_genres`, `item_tags`, and `item_provider_ids`. Provide `EmbyConnector.iter_all_items()` and optionally `EmbyConnector.get_item_metadata()` so the connector can fetch series-level genres for episodes.
+2. **Raw event sync** (`_INIT_POPULATE_watch_hist_raw_events`): Downloads the full playback history via `EmbyConnector.get_all_watch_hist()`, normalises timestamps, and bulk-loads the `watch_hist_raw_events` table.
+3. **Session aggregation** (`_INIT_POPULATE_watch_hist_agg_sessions`): Groups raw events into sessions. Tunable parameters include `session_segment_minutes`, completion thresholds, and minimum seconds for the `sampled` outcome.
+4. **User-item statistics** (`_INIT_POPULATE_watch_hist_user_item_stats`): Summarises aggregate engagement for each `(user, item)` pair, calculating adherence scores and outcome counts.
+5. **Runtime-aware completion update** (`update_completion_ratios`): Rewrites `completion_ratio` for sessions when actual runtime data is available in `library_items`.
+
+Running the steps nightly (or after large library changes) keeps the downstream analytics model aligned with the latest viewing behaviour.
+
+## Index summary
+
+Besides the library indexes mentioned earlier, the connector maintains:
+
+- `idx_watch_hist_raw_user_time` on `watch_hist_raw_events(user_id, date, time DESC)`
+- `idx_watch_hist_agg_sessions` on `watch_hist_agg_sessions(user_id, session_end_timestamp DESC)`
+- `idx_watch_hist_agg_item` on `watch_hist_agg_sessions(item_id)`
+- `idx_watch_hist_user_item_stats` on `watch_hist_user_item_stats(user_id, adherence_score DESC)`
+- `idx_genres_item` on `item_genres(item_id)`
+- `idx_tags_item` on `item_tags(item_id)`
+- `idx_provider_provider` on `item_provider_ids(provider)`
+
+These indexes are recreated automatically with `CREATE INDEX IF NOT EXISTS`, so repeated pipeline runs are safe.

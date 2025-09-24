@@ -1,44 +1,66 @@
-# EMBRACE - Documentation
+# EMBRACE Documentation
 
-## Dependencies
+EMBRACE is a local-first recommendation and analytics engine built around your Emby library. The project ingests playback history and rich metadata so downstream models can reason about what each household actually watches.
 
-python version: 3.13
+## Supported runtimes and tooling
 
-## Install and run locally
+- **Python**: The project requires Python **3.11 or newer** (see `pyproject.toml`). Development has primarily targeted CPython 3.11/3.12, so you do not need to upgrade to 3.13 unless you already run it.
+- **Optional services**:
+  - **SQLite** is bundled and created on demand under `sqlite_db/`.
+  - **MySQL** (via Docker) backs the optional IMDB ingest pipeline that powers the ML preprocessing step.
+  - **MkDocs** generates the static documentation in this directory (`mkdocs serve` for live preview).
 
-1. Clone repo
+## Quickstart (local Python environment)
+
+1. **Clone the repository**
+
+   ```sh
+   git clone https://github.com/bgrando24/EMBRACE.git
+   cd EMBRACE
+   ```
+
+2. **Create a virtual environment and install dependencies**
+
+   ```sh
+   python3 -m venv .venv
+   source .venv/bin/activate        # Windows: .venv\Scripts\activate.bat
+   pip install -e . -r requirements.txt
+   ```
+
+3. **Configure environment variables**
+
+   Populate both `.env` files so the connectors can authenticate:
+
+   ```sh
+   cp .env.example .env
+   cp scripts/mysql/.env.example scripts/mysql/.env   # optional MySQL pipeline
+   ```
+
+   The [environment variables guide](env_vars.md) documents every setting and when it is required.
+
+4. **Run the application entry point**
+
+   ```sh
+   python3 src/main.py
+   ```
+
+   The default script demonstrates how to build genre embeddings from the IMDB dataset once the supporting databases are populated.
+
+## Docker usage
+
+A simple Dockerfile is provided for packaging the core application. Build and run it with:
+
 ```sh
-git clone https://github.com/bgrando24/EMBRACE.git
+docker build -t embrace .
+docker run --env-file .env embrace
 ```
 
-2. Create python virtual environment, activate it, and install project + dependencies
-```sh
-python3 -m venv venv        # or replace the last 'venv' with whatever name you want to use
-source venv/bin/activate    # use "C:\> <venv>\Scripts\activate.bat" on windows
-pip install -e . -r requirements.txt
-```
+For the optional IMDB + MySQL toolchain, see the dedicated [MySQL database guide](databases/mysql.md) for docker-compose instructions.
 
-3. Create and update environment variables
-    * Note there are two `.env` files, one at the project root and one under scripts/mysql
-```sh
-# dont forget to fill in the placeholder values for both files
-cp .env.example .env
-cp scripts/mysql/.env.example scripts/mysql/.env  
-```
+## Where to go next
 
-4. Run locally
-```sh
-python3 src/main.py
-```
-
-</br>
-
-## Building and running the Docker container
-
-Build: `docker build -t <container_name> .`
-
-Run: `docker run --env-file .env <container_name>`
-
----
-
-</br></br>
+- [Architecture overview](architecture/overview.md) explains the major components and how the connectors interact.
+- [Environment variables](env_vars.md) clarifies which credentials are required for Emby, TMDB, and MySQL.
+- [Data ingestion workflows](workflows/data_ingestion.md) walks through library metadata ingestion, watch-history processing, and TMDB synchronisation.
+- [SQLite schema reference](databases/sqlite.md) documents the operational data store created by `SQLiteConnector`.
+- [MySQL + IMDB reference](databases/mysql.md) covers the optional dataset that powers the ML preprocessing step.

@@ -24,7 +24,8 @@ EMBRACE is a local-first recommendation and analytics engine built around your E
    ```sh
    python3 -m venv .venv
    source .venv/bin/activate        # Windows: .venv\Scripts\activate.bat
-   pip install -e . -r requirements.txt
+   pip install -r requirements.txt
+   pip install -e .
    ```
 
 3. **Configure environment variables**

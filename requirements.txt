@@ -9,7 +9,6 @@ cycler==0.12.1
 debugpy==1.8.16
 decorator==5.2.1
 dotenv==0.9.9
--e git+https://git.brandongrando.dev/bgrando/EMBRACE@b41602efdacab2d69ca30b91f9c941207b8b6850#egg=embrace
 executing==2.2.1
 fastparquet==2024.11.0
 fonttools==4.60.0

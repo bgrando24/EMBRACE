@@ -2,6 +2,7 @@ appnope==0.1.4
 asttokens==3.0.0
 certifi==2025.8.3
 charset-normalizer==3.4.3
+click==8.3.0
 comm==0.2.3
 contourpy==1.3.3
 cramjam==2.11.0
@@ -9,28 +10,36 @@ cycler==0.12.1
 debugpy==1.8.16
 decorator==5.2.1
 dotenv==0.9.9
--e git+https://git.brandongrando.dev/bgrando/EMBRACE@b41602efdacab2d69ca30b91f9c941207b8b6850#egg=embrace
+-e git+https://github.com/bgrando24/EMBRACE.git@453f0a95ff467bfe7c7fee5b3954aa3edaef7da8#egg=embrace
 executing==2.2.1
 fastparquet==2024.11.0
 fonttools==4.60.0
 fsspec==2025.9.0
+ghp-import==2.1.0
 idna==3.10
 ipykernel==6.30.1
 ipython==9.5.0
 ipython_pygments_lexers==1.1.1
 jedi==0.19.2
+Jinja2==3.1.6
 joblib==1.5.2
 jupyter_client==8.6.3
 jupyter_core==5.8.1
 kiwisolver==1.4.9
+Markdown==3.9
+MarkupSafe==3.0.2
 matplotlib==3.10.6
 matplotlib-inline==0.1.7
+mergedeep==1.3.4
+mkdocs==1.6.1
+mkdocs-get-deps==0.2.0
 mysql-connector-python==9.4.0
 nest-asyncio==1.6.0
 numpy==2.3.2
 packaging==25.0
 pandas==2.3.2
 parso==0.8.5
+pathspec==0.12.1
 pexpect==4.9.0
 pillow==11.3.0
 platformdirs==4.4.0
@@ -44,6 +53,8 @@ pyparsing==3.2.4
 python-dateutil==2.9.0.post0
 python-dotenv==1.1.1
 pytz==2025.2
+PyYAML==6.0.2
+pyyaml_env_tag==1.1
 pyzmq==27.1.0
 requests==2.32.4
 scikit-learn==1.7.2
@@ -55,4 +66,5 @@ tornado==6.5.2
 traitlets==5.14.3
 tzdata==2025.2
 urllib3==2.5.0
+watchdog==6.0.0
 wcwidth==0.2.13

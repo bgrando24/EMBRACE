@@ -1,6 +1,6 @@
 # Environment Variables
 
-Two `.env` files ship with the project: one at the repository root for the Python services, and another under `scripts/mysql/` that configures the optional IMDB MySQL stack. Use the examples as a baseline and fill in the values that match your deployment.
+Two `.env` files are required: one at the repository root for the Python services, and another under `scripts/mysql/` that configures the optional IMDB MySQL stack. Use the examples as a baseline and fill in the values that match your deployment.
 
 ## Root `.env`
 

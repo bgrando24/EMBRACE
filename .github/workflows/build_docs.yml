@@ -1,5 +1,9 @@
 name: Build MkDocs Site
 
+permissions:
+    contents: read
+    deployments: write # required to create a deployment entry for cloudflare pages
+
 on:
     push:
         branches:
@@ -13,6 +17,8 @@ on:
 
 jobs:
     build:
+        # only allow pipeline to run on Github runner
+        if: ${{ github.server_url == 'https://github.com' }}
         runs-on: ubuntu-latest
         steps:
             - name: Check out repository

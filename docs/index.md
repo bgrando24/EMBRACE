@@ -1,67 +1,52 @@
-# EMBRACE Documentation
+# EMBRACE - <b><i>Emb</i></b>y <b><i>R</i></b>ecommendation <b><i>a</i></b>nd <b><i>C</i></b>ontext <b><i>E</i></b>ngine
 
-EMBRACE is a local-first recommendation and analytics engine built around your Emby library. The project ingests playback history and rich metadata so downstream models can reason about what each household actually watches.
+EMBRACE is an intelligent and personalised recommendation engine for [Emby](https://emby.media/).
 
-## Supported runtimes and tooling
+The aim of EMBRACE is to build a local, privacy-first recommendation engine that goes beyond basic recommendations based on simple metadata (genre overlap, similar actors/directors, etc).
+Instead, the goal here is to support richer, more nuanced and intelligent, conversational recommendations.
 
--   **Python**: The project requires Python **3.11 or newer** (see `pyproject.toml`). Development has primarily targeted CPython 3.11/3.12, so you do not need to upgrade to 3.13 unless you already run it.
--   **Optional services**:
-    -   **SQLite** is bundled and created on demand under `sqlite_db/`.
-    -   **MySQL** (via Docker) backs the optional IMDB ingest pipeline that powers the ML preprocessing step.
-    -   **MkDocs** generates the static documentation in this directory (`mkdocs serve` for live preview).
+## Motivation
 
-## Quickstart (local Python environment)
+Standard recommendation algorithms seen in popular streaming services can work well at times, but often succeed by _'throwing a bunch of recommendations at the wall and seeing what sticks'_. For example: "you watched a comedy movie, here are other comedy movies".
 
-1. **Clone the repository**
+This may work fine at times, but **what if** we had a recommendation assistant who not only knew our watch history and our viewing habits, but one we could also converse with for better, more nuanced recommendations?
 
-    ```
-    git clone https://github.com/bgrando24/EMBRACE.git
-    cd EMBRACE
-    ```
+> A personal example: I found I'm quite a fan of 'dry Canadian humour' shows like _Trailer Park Boys_, >_Letterkenny_, and _Shoresy_. If you look up their tagged genres in IMdb, you'll find the following:
+>
+> 1.  **Trailer Park Boys**: _Mokumentary, Raunchy Comedy, Sitcom, Stoner Comedy, Comedy, Crime_
+> 2.  **Letterkenny**: _Quick Comedy, Sitcom, Comedy_
+> 3.  **Shoresy**: _Raunchy Comedy, Action, Comedy, Drama, Sport_
+>
+> If you fed just these genre tags into a recommendation algorithm, you might get some decent results among other less useful results. But what if I wanted to ask "_I really liked the sometimes subtle and implied humour in Trailer park Boys, mixed with the wacky 'trailer-trash' setting of the characters. Are there other shows that have a similar theme to this?_"
 
-2. **Create a virtual environment and install dependencies**
+The idea is that EMBRACE would learn from **your** specific watch history, but it will also take it a step beyond that. It will analyse your watch habits per show/movie (e.g. how often do you actually finish watching the show
+Did it take you multiple tries or did you binge watch it in a few days?). From there, it will also analyse each item in your Emby library over time to extract richer and more detailed sentiments about each show/movie, so ultimately you **can** ask for more specific and personalised recommendations, and also engage in conversational-style discussions to find your next great watch.
 
-    ```
-    python3 -m venv .venv
-    source .venv/bin/activate        # Windows: .venv\Scripts\activate.bat
-    pip install -r requirements.txt
-    pip install -e .
-    ```
+## Key Goals - Core focus for first MVP
 
-3. **Configure environment variables**
+### 1: Local and Private
 
-    Populate both `.env` files so the connectors can authenticate:
+The entire system will be built with a self-hosted-first approach. There will strictly be **NO** dependency or necessary requirements on external 3rd party internet API services that consume or otherwise 'see' your data.
 
-    ```
-    cp .env.example .env
-    cp scripts/mysql/.env.example scripts/mysql/.env   # optional MySQL pipeline
-    ```
+There are planned future features to allow for cloud-based hosting of databases **if, and only if,** you specifically don't want to store your data locally (e.g. for storage redundancy or capacity reasons).
 
-    The [environment variables guide](env_vars.md) documents every setting and when it is required.
+Any future integrations of 3rd party services (e.g. OpenAI, Claude, etc), if added, will be **strictly fully optional and will not retract from the functionality of EMBRACE if they are not used**. Any integration features like this will only be added in general if they can provide some real, worth-while benefit that can't be reasonably obtained on local consumer-grade hardware.
 
-4. **Run the application entry point**
+### 2: Nuanced Tagging and Classification
 
-    ```
-    python3 src/main.py
-    ```
+Library items will be processed and classified to provide rich and nuanced tags and extended metadata. Beyond basic genre classifications like "comedy", "romance", "action drama".
 
-    The default script demonstrates how to build genre embeddings from the IMDB dataset once the supporting databases are populated.
+### 3: Conversational Interface
 
-## Docker usage
+The main suggestion interface will be a chat-bot that can handle conversational-like questions and requests. Likely based on an LLM, it should allow a user to have discussions about recommendations or suggestions, while also accepting feedback or corrections from the user.
 
-A simple Dockerfile is provided for packaging the core application. Build and run it with:
+### 4. Modularity
 
-```
-docker build -t embrace .
-docker run --env-file .env embrace
-```
+While this may be a vague goal title, the idea of EMBRACE is to be modular in its integration, and its features:
 
-For the optional IMDB + MySQL toolchain, see the dedicated [MySQL database guide](databases/mysql.md) for docker-compose instructions.
-
-## Where to go next
-
--   [Architecture overview](architecture/overview.md) explains the major components and how the connectors interact.
--   [Environment variables](env_vars.md) clarifies which credentials are required for Emby, TMDB, and MySQL.
--   [Data ingestion workflows](workflows/data_ingestion.md) walks through library metadata ingestion, watch-history processing, and TMDB synchronisation.
--   [SQLite schema reference](databases/sqlite.md) documents the operational data store created by `SQLiteConnector`.
--   [MySQL + IMDB reference](databases/mysql.md) covers the optional dataset that powers the ML preprocessing step.
+-   it should be relatively simple for any Emby user to run an EMBRACE locally on their own hardware with minimal steps. This includes supporting varying degrees of hardware tiers - user's shouldn't need a compute farm just to run EMBRACE effectively, but also utilise powerful hardware if it's available.
+-   It should work cleanly and efficiently for different users on a single Emby library/server. The whole point is a **personalised** service.
+-   Features should be decoupled and modular where possible, not only for development purposes but also for user preferences. For example:
+    -   If one part of the EMBRACE system is down, this shouldn't crash the whole system if it can be avoided
+    -   If a user doesn't want the full chat-bot service, they shouldn't be forced to use it
+    -   If a person's Emby set-up doesn't use Jellyseerr, then EMBRACE should still work fine for them

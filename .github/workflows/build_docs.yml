@@ -1,0 +1,59 @@
+name: Build MkDocs Site
+
+on:
+    push:
+        branches:
+            - main
+        paths:
+            - docs/**
+    pull_request:
+        paths:
+            - docs/**
+    workflow_dispatch:
+
+jobs:
+    build:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Check out repository
+              uses: actions/checkout@v4
+
+            - name: Set up Python
+              uses: actions/setup-python@v5
+              with:
+                  python-version: "3.11"
+
+            - name: Install MkDocs
+              run: |
+                  python -m pip install --upgrade pip
+                  pip install mkdocs
+
+            - name: Build documentation
+              run: mkdocs build --strict
+
+            - name: Upload site artifact
+              uses: actions/upload-artifact@v4
+              with:
+                  name: mkdocs-site
+                  path: site
+                  if-no-files-found: error
+
+    deploy:
+        needs: build
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        runs-on: ubuntu-latest
+        steps:
+            - name: Download built site
+              uses: actions/download-artifact@v4
+              with:
+                  name: mkdocs-site
+                  path: site
+
+            - name: Publish to Cloudflare Pages
+              uses: cloudflare/pages-action@v1
+              with:
+                  apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+                  accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+                  projectName: embrace-docs
+                  directory: site
+                  gitHubToken: ${{ secrets.GITHUB_TOKEN }}

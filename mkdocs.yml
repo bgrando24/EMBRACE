@@ -1,9 +1,14 @@
 site_name: EMBRACE - Documentation
 nav:
-    - Home: index.md
-    - Environment Variables: env_vars.md
-    - Databases:
-          - SQLite: databases/sqlite.md
+  - Home: index.md
+  - Architecture:
+      - Overview: architecture/overview.md
+  - Environment Variables: env_vars.md
+  - Workflows:
+      - Data Ingestion: workflows/data_ingestion.md
+  - Databases:
+      - SQLite: databases/sqlite.md
+      - MySQL: databases/mysql.md
 
 # for local use
 use_directory_urls: false

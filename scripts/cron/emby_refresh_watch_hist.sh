@@ -15,7 +15,7 @@ set -euo pipefail
 #==================
 
 # CRON_SCHEDULE: when the job should run - for syntax reference: https://docs.gitlab.com/topics/cron/#cron-syntax
-"${CRON_SCHEDULE:="@daily"}"
+: "${CRON_SCHEDULE:=@daily}"
 # cron by default uses system timezone, but setting this just to be safe
 "${CRON_TZ:="Australia/Melbourne"}"
 # CRON_TAG: label that wraps the cron entry between "BEGIN/END" blocks - helpful for removing job later
@@ -45,7 +45,7 @@ PY_SCRIPT="${PROJECT_ROOT}/scripts/sqlite/emby_refresh_watch_hist.py"
 
 if [[ -x "${PROJECT_ROOT}/venv/bin/python" ]]; then 
 	PYTHON="${PROJECT_ROOT}/venv/bin/python"
-elif command -v python3 >dev/dev/null 2>&1; then
+elif command -v python3 >/dev/null 2>&1; then
 	PYTHON="$(command -v python3)"
 else
 	echo "ERROR: python3 not found and no venv at ${PROJECT_ROOT}/venv/bin/python" >&2

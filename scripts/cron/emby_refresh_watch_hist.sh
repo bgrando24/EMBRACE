@@ -61,12 +61,14 @@ fi
 
 # logs dir and files
 LOG_DIR="${PROJECT_ROOT}/logs"
+TMP_DIR="${PROJECT_ROOT}/tmp"
 mkdir -p "${LOG_DIR}"
+mkdir -p "${TMP_DIR}"
 OUT_LOG="${LOG_DIR}/cron_emby_refresh_watch_hist.out.log"
 ERR_LOG="${LOG_DIR}/cron_emby_refresh_watch_hist.err.log"
 
 # lock file: ensures only one instance runs at a time
-LOCK_FILE="${PROJECT_ROOT}/tmp/${CRON_TAG}.lock"
+LOCK_FILE="${TMP_DIR}/${CRON_TAG}.lock"
 
 # common locations for flock
 FLOCK_BIN=""

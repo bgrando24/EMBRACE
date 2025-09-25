@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 
 # This script adds/removes a cron job to the executing machine, that runs a DAILY fetch of the Emby
 # 	user watch history and stores it into the local SQLite database.
@@ -15,9 +15,9 @@ set -euo pipefail
 #==================
 
 # CRON_SCHEDULE: when the job should run - for syntax reference: https://docs.gitlab.com/topics/cron/#cron-syntax
-"${CRON_SCHEDULE:=@daily}"
+"${CRON_SCHEDULE:="@daily"}"
 # cron by default uses system timezone, but setting this just to be safe
-"${CRON_TZ:=Australia/Melbourne}"
+"${CRON_TZ:="Australia/Melbourne"}"
 # CRON_TAG: label that wraps the cron entry between "BEGIN/END" blocks - helpful for removing job later
 "${CRON_TAG:=emby_watch_hist_refresh}"
 

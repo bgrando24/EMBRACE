@@ -151,7 +151,7 @@ install_cron_block() {
 
   # webhook to notify of successful run
   curl -i -H "Accept: application/json" -H "Content-Type:application/json" -X POST \
-	  --data "{\"content\": \"Installed/updated cron job '${CRON_TAG}'\nSchedule: #{CRON_TZ:+(${CRON_TZ}) }${CRON_SCHEDULE}\nProject: ${PROJECT_ROOT}\"}" \
+	  --data "{\"content\": \"Installed/updated cron job '${CRON_TAG}'\nSchedule: ${CRON_TZ:+(${CRON_TZ}) }${CRON_SCHEDULE}\nProject: ${PROJECT_ROOT}\"}" \
 	  https://discord.com/api/webhooks/1420906039242522684/30EaHuuVIb6GiKtIBeTOecSK24JqQpiw-S_iteSL6VQWM1Ma4meNP-hit14hnvfojL4F
 }
 
@@ -162,7 +162,7 @@ run_once_now() {
   echo "Done."
 
   curl -i -H "Accept: application/json" -H "Content-Type:application/json" -X POST \
-	  --data "{\"content\": \"Installed/updated cron job '${CRON_TAG}'\nSchedule: #{CRON_TZ:+(${CRON_TZ}) }${CRON_SCHEDULE}\nProject: ${PROJECT_ROOT}\"}" \
+	  --data "{\"content\": \"Installed/updated cron job '${CRON_TAG}'\nSchedule: ${CRON_TZ:+(${CRON_TZ}) }${CRON_SCHEDULE}\nProject: ${PROJECT_ROOT}\"}" \
 	  https://discord.com/api/webhooks/1420906039242522684/30EaHuuVIb6GiKtIBeTOecSK24JqQpiw-S_iteSL6VQWM1Ma4meNP-hit14hnvfojL4F
 }
 

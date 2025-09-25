@@ -17,9 +17,9 @@ set -euo pipefail
 # CRON_SCHEDULE: when the job should run - for syntax reference: https://docs.gitlab.com/topics/cron/#cron-syntax
 : "${CRON_SCHEDULE:=@daily}"
 # cron by default uses system timezone, but setting this just to be safe
-"${CRON_TZ:="Australia/Melbourne"}"
+: "${CRON_TZ:=Australia/Melbourne}"
 # CRON_TAG: label that wraps the cron entry between "BEGIN/END" blocks - helpful for removing job later
-"${CRON_TAG:=emby_watch_hist_refresh}"
+: "${CRON_TAG:=emby_watch_hist_refresh}"
 
 
 

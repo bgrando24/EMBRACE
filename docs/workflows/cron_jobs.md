@@ -11,9 +11,14 @@ Located under: `scripts/cron/emby_refresh_watch_hist.sh`
 
 The purpose of this cron job is to refresh the Emby watch history database daily at 00:00.
 
+This script has three modes, you can also use the "--help" flag to see these options:
+- `install_refresh_cron.sh`          - install or update the cron job
+- `install_refresh_cron.sh --remove` - remove the cron job
+- `install_refresh_cron.sh --run`    - run the job once now (same command cron would run)
+
 Running this script will add a cron job to the executing machine which does the following:
 1. Renames the current SQLite database file to append the current date + time (Australia/melbourne timezone) and ".backup"
 2. Moves the now 'backup' file to sqlite\_db/backups
 3. Run the a python script to create a new SQLite database file, build the schema, and import the required Emby data
 
-The mentioned python script is located under `scripts/sqlite/emby_refresh_watch_hist.py`
+The mentioned python script is located under `scripts/sqlite/emby_refresh_watch_hist.py`.

@@ -166,13 +166,6 @@ run_once_now() {
 	  https://discord.com/api/webhooks/1420906039242522684/30EaHuuVIb6GiKtIBeTOecSK24JqQpiw-S_iteSL6VQWM1Ma4meNP-hit14hnvfojL4F
 }
 
-run_once_now() {
-  echo "Running once now with same command cron will use..."
-  # shellcheck disable=SC2046
-  bash -lc "$(build_job_command | sed -E 's/^[0-9\*].* //')"  # strip cron timing if any
-  echo "Done."
-}
-
 # =========================
 # Main
 # =========================

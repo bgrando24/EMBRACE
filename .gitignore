@@ -7,3 +7,5 @@
 /src/embrace.egg-info
 /src/ml/__pycache__
 /data
+/tmp
+/logs

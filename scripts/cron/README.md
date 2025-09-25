@@ -6,7 +6,7 @@ Don't forget to run the following before attempting to execute the script:
 ```sh
 chmod +x refresh_emby_watch_hist.sh
 ```
-**IMPORTANT:** Assumes the python script is located at `{project root}/scripts/python/emby_refresh_user_watch_hist.py`
+**IMPORTANT:** Assumes the python script is located at `{project root}/scripts/sqlite/emby_refresh_user_watch_hist.py`
 
 ### What this script does
 

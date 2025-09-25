@@ -32,7 +32,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 # project's root: assumes this file lives in scripts/cron/, or two levels down from project root
 PROJECT_ROOT="$(realpath "${SCRIPT_DIR}/../..")"
 # path of python script to run, relative to project root
-PY_SCRIPT="${PROJECT_ROOT}/scripts/sqlite/refresh_emby_watch_hist.py"
+PY_SCRIPT="${PROJECT_ROOT}/scripts/sqlite/emby_refresh_watch_hist.py"
 
 
 

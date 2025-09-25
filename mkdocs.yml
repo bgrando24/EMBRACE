@@ -8,6 +8,7 @@ nav:
     - Environment Variables: env_vars.md
     - Workflows:
           - Data Ingestion: workflows/data_ingestion.md
+          - Cron Jobs: workflows/cron_jobs.md
     - Databases:
           - SQLite: databases/sqlite.md
           - MySQL: databases/mysql.md

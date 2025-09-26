@@ -11,11 +11,12 @@ class PreProcess:
         pass
     
     def imdb_get_encoded_genres(self, cache_path: str = "data/cache/imdb_genres_ohe.parquet", refresh: bool = False) -> pd.DataFrame:
-        """Fetch IMDB titles/genres, return one-hot encoded DF.
+        """Fetch IMDB titles and their genres, return one-hot encoded pandas DataFrame
            Uses on-disk cache (.parquet or .pkl) unless refresh=True."""
+        
         cache = Path(cache_path)
 
-        # Load from cache if present (accept .parquet or .pkl)
+        # load from cache if present (accept .parquet or .pkl)
         if not refresh:
             candidates = []
             if cache.exists():
@@ -47,20 +48,20 @@ class PreProcess:
         if data.empty:
             raise Exception("ERROR [imdb_get_encoded_genres]: No data returned when fetching data")
         
-        # One-hot encode only the 'genre' column
+        # one-hot encode only the 'genre' column
         dummies = pd.get_dummies(data["genre"], prefix="genre", dtype="uint8")
         encoded = pd.concat([data.drop(columns=["genre"]), dummies], axis=1)
         encoded = encoded.groupby(["t_const", "primary_name"], as_index=False).sum()
 
-        # Use sparse types in-memory to save RAM
+        # use sparse types in-memory to save RAM
         for c in encoded.columns:
             if c.startswith("genre_"):
                 encoded[c] = encoded[c].astype(pd.SparseDtype("uint8", 0))
 
-        # Save cache. Prefer Parquet; if sparse not supported or no engine, fall back to pickle.
+        # save to cache - prefer Parquet, if sparse not supported or no engine, fall back to pickle
         cache.parent.mkdir(parents=True, exist_ok=True)
         try:
-            # Densify only genre columns for Parquet
+            # densify only genre columns for Parquet
             dense = encoded.copy()
             genre_cols = [c for c in dense.columns if c.startswith("genre_")]
             for c in genre_cols:

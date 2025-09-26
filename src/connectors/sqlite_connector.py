@@ -1115,5 +1115,8 @@ class SQLiteConnector:
 
     def get_watch_hist_user_items_stats(self) -> pd.DataFrame:
         """Returns the watch_hist_user_item_stats table as a pandas DataFrame"""
-        
         return pd.read_sql_query(self._cursor.execute("SELECT * FROM watch_user_item_stats"), self._connection)
+    
+    def get_item_provider_ids(self) -> pd.DataFrame:
+        """Returns the item_provider_ids table as a pandas DataFrame"""
+        return pd.read_sql_query(self._cursor.execute("SELECT * FROM item_provider_ids"), self._connection)

@@ -1,14 +1,19 @@
 import pandas as pd
 import sys
 from pathlib import Path
-from connectors import MySQLConnector
+from connectors import MySQLConnector, SQLiteConnector
 from mysql.connector import Error as MySQLError
+from dotenv import load_env
+import os
 
 class PreProcess:
     """Helper class for pre-processing data for usage in models"""
 
     def __init__(self):
-        pass
+        load_env()
+        SQLITE_DB = os.getenv("SQLITE_DB_NAME) or "EMBRACE_SQLITE_DB.db"
+        self.mysql = MySQLConnector("scripts/mysql/.env")
+        self.sqlite = SQLiteConnector(SQLITE_DB, debug=True)
     
     def imdb_get_encoded_genres(self, cache_path: str = "data/cache/imdb_genres_ohe.parquet", refresh: bool = False) -> pd.DataFrame:
         """Fetch IMDB titles and their genres, return one-hot encoded pandas DataFrame
@@ -31,14 +36,13 @@ class PreProcess:
 
         try:
             print("\nAttempting to fetch title names and genres...\n")
-            sql = MySQLConnector("scripts/mysql/.env")
-            sql.curs.execute("""
+            self.mysql.curs.execute("""
                 SELECT t.t_const, t.primary_name, g.genre
                 FROM titles t
                 JOIN genres g ON t.t_const = g.t_const
             """)
-            rows = sql.curs.fetchall()
-            cols = [d[0] for d in sql.curs.description] if sql.curs.description else ["t_const","primary_name","genre"]
+            rows = self.mysql.curs.fetchall()
+            cols = [d[0] for d in self.mysql.curs.description] if self.mysql.curs.description else ["t_const","primary_name","genre"]
             data = pd.DataFrame(rows, columns=cols)
             print("\nTitle data fetched!\n")
         except (Exception, MySQLError) as e:
@@ -77,16 +81,12 @@ class PreProcess:
         return encoded
 
 
-    def match_emby_imdb_genres(self, emby_df: pd.DataFrame):
+    def match_emby_imdb_genres(self):
         """
         Matches up the provided Emby watch history DataFrame, with an IMDB record
-
-        Args:
-            emby_df: A pandas DataFrame of the `watch_hist_item_stats` SQLite table - expects at a MINIMUM columns: user_id, item_id, ...[TBA]...
         """
-
-        if emby_df.empty():
-            raise Exception("ERROR [match_emby_imdb_genres]: Provided DataFrame 'emby_df' is empty")
         
-        # match the item_id to the SQLite item_provider_ids table
-        # need to create method in SQLite connector
+        # grab watch history, join on provider IDs
+        watch_hist = self.sqlite.get_watch_hist_user_items_stats()
+        providers = self.sqlite.get_item_provider_ids()
+        # join pandas tables

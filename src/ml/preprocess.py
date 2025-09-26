@@ -75,3 +75,18 @@ class PreProcess:
             print(f"Saved pickle cache to {pkl} (Parquet unavailable or unsupported: {e})")
 
         return encoded
+
+
+    def match_emby_imdb_genres(self, emby_df: pd.DataFrame):
+        """
+        Matches up the provided Emby watch history DataFrame, with an IMDB record
+
+        Args:
+            emby_df: A pandas DataFrame of the `watch_hist_item_stats` SQLite table - expects at a MINIMUM columns: user_id, item_id, ...[TBA]...
+        """
+
+        if emby_df.empty():
+            raise Exception("ERROR [match_emby_imdb_genres]: Provided DataFrame 'emby_df' is empty")
+        
+        # match the item_id to the SQLite item_provider_ids table
+        # need to create method in SQLite connector

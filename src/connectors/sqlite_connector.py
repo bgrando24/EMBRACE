@@ -7,6 +7,7 @@ from typing import Callable, Dict
 import zlib
 from custom_types import T_EmbyAllUserWatchHist, T_TMDBGenres
 from datetime import datetime, timedelta
+import pandas as pd
 
 
 class SQLiteConnector:
@@ -1107,3 +1108,12 @@ class SQLiteConnector:
         except sqlite3.Error as e:
             if self._debug: print(f"[SQLiteConnector] ERROR: Failed to ingest TMDB genres: {e}", file=sys.stderr)
             return False
+
+
+
+    # ====================================================================== Table fetch methods ======================================================================
+
+    def get_watch_hist_user_items_stats(self) -> pd.DataFrame:
+        """Returns the watch_hist_user_item_stats table as a pandas DataFrame"""
+        
+        return pd.read_sql_query(self._cursor.execute("SELECT * FROM watch_user_item_stats"), self._connection)

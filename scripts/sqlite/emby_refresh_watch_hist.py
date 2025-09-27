@@ -3,6 +3,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from pathlib import Path
 from dotenv import load_dotenv
+from utils import Notifications
 import os
 import shutil
 
@@ -75,5 +76,12 @@ sqlite.update_completion_ratios()
  # create and ingest TMDB tables
 sqlite._INIT_create_tmdb_schemas()
 sqlite.ingest_tmdb_movie_tv_genres(TMDB.fetch_movie_genres, TMDB.fetch_tv_genres)
+
+finished_at = datetime.now(tz=tz).strftime("%Y-%m-%d %H:%M:%S %Z")
+Notifications().discord_send_webhook(
+    f"Cron job: Emby watch history refresh finished at {finished_at}\n"
+    f"Ingest complete: {ok}\n"
+    f"Backup: {backup_path.name}"
+    )
 
 exit(0)

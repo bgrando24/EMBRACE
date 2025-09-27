@@ -4,6 +4,7 @@ import pandas as pd
 from typing import Final
 
 from connectors import EmbyConnector, SQLiteConnector, TMDBConnector
+from utils import Notifications
 
 
 # load and extract env variables
@@ -15,40 +16,43 @@ ENVIRONMENT: Final = os.getenv("ENVIRONMENT") or "dev"
 SQLITE_DB_NAME: Final = os.getenv("SQLITE_DB_NAME") or "EMBRACE_SQLITE_DB.db"
 
 # init API connectors
-Emby = EmbyConnector(debug=(ENVIRONMENT == "dev"))
-TMDB = TMDBConnector(TMDB_READ_ACCESS_TOKEN, debug=(ENVIRONMENT == "dev"))
+# Emby = EmbyConnector(debug=(ENVIRONMENT == "dev"))
+# TMDB = TMDBConnector(TMDB_READ_ACCESS_TOKEN, debug=(ENVIRONMENT == "dev"))
 
-# testing functions
-users = Emby.get_all_emby_users()
-print(users)
-bgmd_hist = Emby.get_user_watch_hist(users["bgmd"], 10)
-print(bgmd_hist)
-all_user_hist = Emby.get_all_watch_hist(1)
-print(all_user_hist)
+# # testing functions
+# users = Emby.get_all_emby_users()
+# print(users)
+# bgmd_hist = Emby.get_user_watch_hist(users["bgmd"], 10)
+# print(bgmd_hist)
+# all_user_hist = Emby.get_all_watch_hist(1)
+# print(all_user_hist)
 
-# test db connection and watch history tables
-sqlite = SQLiteConnector(SQLITE_DB_NAME, debug=True)
-try: 
-    os.remove("sqlite_db/bgmd_db.db")
-except:
-    pass
+# # test db connection and watch history tables
+# sqlite = SQLiteConnector(SQLITE_DB_NAME, debug=True)
+# try: 
+#     os.remove("sqlite_db/bgmd_db.db")
+# except:
+#     pass
 
-sqlite.connect_db()
+# sqlite.connect_db()
 
-# ingest library metadata first so runtime is available for later calculations
-sqlite._INIT_create_library_items_schema()
-ok = sqlite.ingest_all_library_items(Emby.iter_all_items(), Emby.get_item_metadata)
-print("Ingest complete:", ok)
+# # ingest library metadata first so runtime is available for later calculations
+# sqlite._INIT_create_library_items_schema()
+# ok = sqlite.ingest_all_library_items(Emby.iter_all_items(), Emby.get_item_metadata)
+# print("Ingest complete:", ok)
 
-# process watch history using actual runtimes
-sqlite._INIT_POPULATE_watch_hist_raw_events(Emby.get_all_watch_hist)
-sqlite._INIT_POPULATE_watch_hist_agg_sessions()
-sqlite._INIT_POPULATE_watch_hist_user_item_stats()
-sqlite.update_completion_ratios()
+# # process watch history using actual runtimes
+# sqlite._INIT_POPULATE_watch_hist_raw_events(Emby.get_all_watch_hist)
+# sqlite._INIT_POPULATE_watch_hist_agg_sessions()
+# sqlite._INIT_POPULATE_watch_hist_user_item_stats()
+# sqlite.update_completion_ratios()
 
- # create and ingest TMDB tables
-sqlite._INIT_create_tmdb_schemas()
-sqlite.ingest_tmdb_movie_tv_genres(TMDB.fetch_movie_genres, TMDB.fetch_tv_genres)
+#  # create and ingest TMDB tables
+# sqlite._INIT_create_tmdb_schemas()
+# sqlite.ingest_tmdb_movie_tv_genres(TMDB.fetch_movie_genres, TMDB.fetch_tv_genres)
 
 
-
+Notifications().discord_send_webhook(
+    f"Testing Notifications() discord webhook\n"
+    f"If you're seeing this, it works!"
+    )

@@ -14,6 +14,12 @@ on:
         paths:
             - docs/**
     workflow_dispatch:
+        inputs:
+            deploy:
+                description: "Run deploy job (Cloudflare Pages)"
+                required: false
+                default: true
+                type: boolean
 
 jobs:
     build:
@@ -46,7 +52,11 @@ jobs:
 
     deploy:
         needs: build
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: >
+            ${{
+              (github.event_name == 'push' && github.ref == 'refs/heads/main')
+              || (github.event_name == 'workflow_dispatch' && inputs.deploy == 'true')
+            }}
         runs-on: ubuntu-latest
         steps:
             - name: Download built site

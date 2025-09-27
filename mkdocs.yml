@@ -2,16 +2,20 @@ site_name: EMBRACE - Documentation
 nav:
     - Home: index.md
     - Getting Started: getting_started.md
-    - Roadmap: roadmap.md
     - Architecture:
           - Overview: architecture/overview.md
-    - Environment Variables: env_vars.md
+          - Environment Variables: env_vars.md
+          - Modules:
+                - Overview: modules/index.md
+                - Connectors: modules/connectors.md
+                - Machine Learning (ML): modules/ml.md
+          - Databases:
+                - SQLite: databases/sqlite.md
+                - MySQL: databases/mysql.md
     - Workflows:
           - Data Ingestion: workflows/data_ingestion.md
           - Cron Jobs: workflows/cron_jobs.md
-    - Databases:
-          - SQLite: databases/sqlite.md
-          - MySQL: databases/mysql.md
+    - Roadmap: roadmap.md
 
 # for local use
 use_directory_urls: false

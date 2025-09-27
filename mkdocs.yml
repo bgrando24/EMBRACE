@@ -15,3 +15,22 @@ nav:
 
 # for local use
 use_directory_urls: false
+
+# theme
+theme:
+    name: material
+    palette:
+        - scheme: default
+          primary: indigo
+          accent: indigo
+          toggle:
+              icon: material/weather-night
+              name: Dark mode
+        - scheme: slate
+          primary: indigo
+          accent: indigo
+          toggle:
+              icon: material/weather-sunny
+              name: Light mode
+    features:
+        - content.code.copy

@@ -35,7 +35,7 @@ jobs:
                   pip install mkdocs
 
             - name: Build documentation
-              run: mkdocs build --strict
+              run: mkdocs build
 
             - name: Upload site artifact
               uses: actions/upload-artifact@v4

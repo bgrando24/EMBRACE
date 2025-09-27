@@ -104,7 +104,7 @@ remove_cron_block() {
   ' | crontab -
 }
 
-# Command that cron will run: cd into project, run python, log output
+# command that cron will run: cd into project, run python, log output
 build_job_command() {
   local cmd core="cd \"$PROJECT_ROOT\" && \"$PYTHON\" \"$PY_SCRIPT\""
   if [[ -n "$FLOCK_BIN" ]]; then
@@ -130,15 +130,15 @@ install_cron_block() {
   ' <<< "$current")"
 
   {
-    # Keep existing lines
+    # keep existing lines
     printf "%s\n" "$current" | sed '/^[[:space:]]*$/d'
     echo ""
     echo "### BEGIN ${CRON_TAG} (managed by install_refresh_cron.sh) ###"
-    # Optional CRON_TZ line
+    # optional CRON_TZ line
     if [[ -n "$CRON_TZ" ]]; then
       echo "CRON_TZ=${CRON_TZ}"
     fi
-    # Cron entry
+    # cron entry
     echo "${CRON_SCHEDULE} ${cmd}"
     echo "### END ${CRON_TAG} ###"
   } | crontab -
@@ -148,22 +148,13 @@ install_cron_block() {
   echo "Project : ${PROJECT_ROOT}"
   echo "Python  : ${PYTHON}"
   echo "Logs    : ${OUT_LOG} (stdout), ${ERR_LOG} (stderr)"
-
-  # webhook to notify of successful run
-  curl -i -H "Accept: application/json" -H "Content-Type:application/json" -X POST \
-	  --data "{\"content\": \"Installed/updated cron job '${CRON_TAG}'\nSchedule: ${CRON_TZ:+(${CRON_TZ}) }${CRON_SCHEDULE}\nProject: ${PROJECT_ROOT}\"}" \
-	  https://discord.com/api/webhooks/1420906039242522684/30EaHuuVIb6GiKtIBeTOecSK24JqQpiw-S_iteSL6VQWM1Ma4meNP-hit14hnvfojL4F
 }
 
 run_once_now() {
   echo "Running once now with same command cron will use..."
   # shellcheck disable=SC2046
   bash -lc "$(build_job_command | sed -E 's/^[0-9\*].* //')"  # strip cron timing if any
-  echo "Done."
-
-  curl -i -H "Accept: application/json" -H "Content-Type:application/json" -X POST \
-	  --data "{\"content\": \"Installed/updated cron job '${CRON_TAG}'\nSchedule: ${CRON_TZ:+(${CRON_TZ}) }${CRON_SCHEDULE}\nProject: ${PROJECT_ROOT}\"}" \
-	  https://discord.com/api/webhooks/1420906039242522684/30EaHuuVIb6GiKtIBeTOecSK24JqQpiw-S_iteSL6VQWM1Ma4meNP-hit14hnvfojL4F
+  echo "Done!"
 }
 
 # =========================

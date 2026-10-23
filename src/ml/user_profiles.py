@@ -3,7 +3,7 @@ from typing import Iterable, Optional
 import numpy as np
 import pandas as pd
 
-from .genre_knn import GenreKNN
+from .cosine_knn import CosineKNN
 
 
 # a finished movie counts 1; this many hours of a series counts the same
@@ -35,16 +35,17 @@ def title_interest(user_titles: pd.DataFrame) -> pd.Series:
     return movie.where(user_titles["unit_type"] == "Movie", series)
 
 
-class UserGenreProfiles:
+class UserProfiles:
     """
-    Per-user recommendations from watch history: each user's taste profile is the interest-weighted blend of the genre
+    Per-user recommendations from watch history: each user's taste profile is the interest-weighted blend of the feature
     vectors of everything they watched (see `title_interest()`), and recommendations are the titles closest to it.
+    Works with any `CosineKNN` model (`GenreKNN`, `ContentKNN`).
     """
 
-    def __init__(self, knn: GenreKNN, user_titles: pd.DataFrame, min_interest: float = MIN_INTEREST):
+    def __init__(self, knn: CosineKNN, user_titles: pd.DataFrame, min_interest: float = MIN_INTEREST):
         """
         Args:
-            knn (GenreKNN): the genre model
+            knn (CosineKNN): the recommender model, e.g. GenreKNN or ContentKNN
             user_titles (DataFrame): output of `PreProcess.get_user_title_stats()[0]`
             min_interest (float, optional): titles below this are left out of the profile - DEFAULT: MIN_INTEREST
         """
@@ -100,8 +101,8 @@ class UserGenreProfiles:
             n, allowed, types: as for `GenreKNN.recommend()`
 
         Returns:
-            DataFrame: `GenreKNN.recommend_for_profile()` columns + `because_you_watched` (the profile title with the
-            most similar genres, ties going to the one with the most interest; None if no genre is shared)
+            DataFrame: `recommend_for_profile()` columns + `because_you_watched` (the most similar profile title, ties
+            going to the one with the most interest; None if nothing is shared) + `shared` (what the two have in common)
 
         Raises:
             KeyError: unknown user
@@ -113,15 +114,18 @@ class UserGenreProfiles:
             profile, n=n, allowed=allowed, types=types, exclude=self._history_of(user_id)["imdb_id"]
         )
         if recs.empty:
-            return recs.assign(because_you_watched=pd.Series(dtype=object))
+            return recs.assign(because_you_watched=pd.Series(dtype=object), shared=pd.Series(dtype=object))
 
-        watched = self.knn._X[self.knn._row_of[titles["imdb_id"]].to_numpy()]
-        recommended = self.knn._X[self.knn._row_of[recs["t_const"]].to_numpy()]
         # similarity first, not interest x similarity: otherwise one long binge "explains" anything sharing a genre
         # with it. Titles are sorted by interest, and argmax returns the first maximum, so ties go to higher interest.
-        similarity = np.round(watched @ recommended.T, 6)
-        because = titles["unit_name"].to_numpy()[similarity.argmax(axis=0)]
-        recs["because_you_watched"] = np.where(similarity.max(axis=0) > 0, because, None)
+        similarity = np.round(self.knn.similarity_between(titles["imdb_id"], recs["t_const"]), 6)
+        best = similarity.argmax(axis=0)
+        has_reason = similarity.max(axis=0) > 0
+        recs["because_you_watched"] = np.where(has_reason, titles["unit_name"].to_numpy()[best], None)
+        recs["shared"] = [
+            self.knn.shared_between(titles["imdb_id"].iloc[i], [rec])[0] if ok else []
+            for i, rec, ok in zip(best, recs["t_const"], has_reason)
+        ]
         return recs
 
     def _history_of(self, user_id: str) -> pd.DataFrame:

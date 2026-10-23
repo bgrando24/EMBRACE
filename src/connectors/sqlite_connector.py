@@ -5,6 +5,7 @@ from typing import Optional, Final
 import os
 from typing import Callable, Dict
 import zlib
+import json
 from custom_types import T_EmbyAllUserWatchHist, T_TMDBGenres
 from datetime import datetime, timedelta
 import pandas as pd
@@ -1187,6 +1188,177 @@ class SQLiteConnector:
             if self._debug: print(f"[SQLiteConnector] ERROR: Failed to ingest TMDB genres: {e}", file=sys.stderr)
             return False
 
+
+
+    # Emby item type -> TMDB media type
+    TMDB_MEDIA_TYPES = {"Movie": "movie", "Series": "tv"}
+
+    def _ensure_tmdb_title_details_schema(self) -> bool:
+        """
+        Creates (if doesn't exist) `tmdb_title_details`: content metadata (description, keywords, cast/crew...) per
+        TMDB title, for the movies and series in the library. List columns are JSON. `found` = 0 records a TMDB 404,
+        so a dead ID isn't retried until it's due for a refresh.
+
+        Also `tmdb_imdb_lookups`: IMDB ID -> TMDB title found with TMDB's /find (tmdb_id NULL = not found), used for
+        episodes whose show has no TMDB link in the library (it was removed, or Emby IDs changed on the rebuild).
+        """
+        try:
+            self._connection.execute("""
+                CREATE TABLE IF NOT EXISTS tmdb_imdb_lookups(
+                    imdb_id TEXT PRIMARY KEY,
+                    media_type TEXT,
+                    tmdb_id INTEGER,
+                    looked_up_at TEXT NOT NULL
+                )""")
+            self._connection.execute("""
+                CREATE TABLE IF NOT EXISTS tmdb_title_details(
+                    media_type TEXT NOT NULL,
+                    tmdb_id INTEGER NOT NULL,
+                    found INTEGER NOT NULL,
+                    imdb_id TEXT,
+                    title TEXT,
+                    overview TEXT,
+                    original_language TEXT,
+                    genres TEXT,
+                    keywords TEXT,
+                    collection TEXT,
+                    people TEXT,
+                    fetched_at TEXT NOT NULL,
+                    PRIMARY KEY (media_type, tmdb_id)
+                )""")
+            self._connection.commit()
+            return True
+        except sqlite3.Error as e:
+            print(f"[SQLiteConnector] ERROR: Failed to create tmdb_title_details: {e}", file=sys.stderr)
+            return False
+
+    def ingest_tmdb_title_details(
+        self,
+        fetch_title_details_func: Callable[[str, int], Optional[dict]],
+        find_by_imdb_id_func: Optional[Callable[[str], Optional[tuple[str, int]]]] = None,
+        max_age_days: int = 90,
+        limit: Optional[int] = None,
+    ) -> int:
+        """
+        Fetches TMDB details for the library's movies and series (including removed ones, which are still in watch
+        history) that have none yet, or whose details are older than `max_age_days`. Missing titles go first.
+
+        With `find_by_imdb_id_func`, shows that only appear through their episodes (removed from the library, or
+        their Emby series ID changed on the rebuild) are first looked up from one episode's IMDB ID per series name.
+
+        Args:
+            fetch_title_details_func: e.g. `TMDBConnector.fetch_title_details` - (media_type, tmdb_id) -> dict | None
+            find_by_imdb_id_func (optional): e.g. `TMDBConnector.find_by_imdb_id` - imdb_id -> (media_type, tmdb_id) | None
+            max_age_days (int, optional): Re-fetch details older than this - DEFAULT: 90
+            limit (int, optional): Fetch at most this many titles this run
+
+        Returns:
+            int: number of titles fetched (including 404s), or -1 if there was work to do and every fetch failed
+        """
+        if self._connection is None or not self._ensure_tmdb_title_details_schema():
+            return -1
+
+        type_case = " ".join(f"WHEN '{emby}' THEN '{tmdb}'" for emby, tmdb in self.TMDB_MEDIA_TYPES.items())
+        cutoff = (datetime.now() - timedelta(days=max_age_days)).strftime("%Y-%m-%d %H:%M:%S")
+        if find_by_imdb_id_func is not None:
+            self._lookup_unlinked_shows(find_by_imdb_id_func, cutoff)
+        due = self._connection.execute(f"""
+            WITH targets AS (
+                SELECT CASE l.item_type {type_case} END AS media_type, CAST(p.provider_item_id AS INTEGER) AS tmdb_id
+                FROM library_items l
+                JOIN item_provider_ids p ON p.item_id = l.item_id AND p.provider = 'tmdb'
+                WHERE l.item_type IN ({",".join("?" * len(self.TMDB_MEDIA_TYPES))})
+                UNION
+                SELECT media_type, tmdb_id FROM tmdb_imdb_lookups WHERE tmdb_id IS NOT NULL
+            )
+            SELECT t.media_type, t.tmdb_id, d.fetched_at
+            FROM targets t
+            LEFT JOIN tmdb_title_details d ON d.media_type = t.media_type AND d.tmdb_id = t.tmdb_id
+            WHERE t.tmdb_id > 0 AND (d.fetched_at IS NULL OR d.fetched_at < ?)
+            ORDER BY d.fetched_at IS NOT NULL, d.fetched_at, t.media_type, t.tmdb_id
+        """, [*self.TMDB_MEDIA_TYPES, cutoff]).fetchall()
+        due = due[:limit] if limit is not None else due
+        if not due:
+            return 0
+
+        fetched = failed = 0
+        for i, (media_type, tmdb_id, _) in enumerate(due, start=1):
+            try:
+                d = fetch_title_details_func(media_type, tmdb_id)
+            except Exception as e:
+                failed += 1
+                print(f"[SQLiteConnector] WARN: TMDB fetch failed for {media_type}/{tmdb_id}: {e}", file=sys.stderr)
+                continue
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            if d is None:
+                row = (media_type, tmdb_id, 0, None, None, None, None, None, None, None, None, now)
+            else:
+                row = (media_type, tmdb_id, 1, d["imdb_id"], d["title"], d["overview"], d["original_language"],
+                       json.dumps(d["genres"]), json.dumps(d["keywords"]), d["collection"], json.dumps(d["people"]), now)
+            self._connection.execute(f"INSERT OR REPLACE INTO tmdb_title_details VALUES ({','.join('?' * 12)})", row)
+            fetched += 1
+            if i % 50 == 0:
+                self._connection.commit()
+                if self._debug: print(f"[SQLiteConnector] TMDB details: {i}/{len(due)}")
+        self._connection.commit()
+        if self._debug: print(f"[SQLiteConnector] TMDB details fetched: {fetched}, failed: {failed}")
+        return -1 if fetched == 0 else fetched
+
+    def _lookup_unlinked_shows(self, find_by_imdb_id_func: Callable[[str], Optional[tuple[str, int]]], cutoff: str) -> int:
+        """
+        For each series name whose episodes have no TMDB-linked series in library_items, looks up the show from one
+        episode's IMDB ID (lookups older than `cutoff` are redone). Returns the number of lookups made.
+        """
+        todo = [r[0] for r in self._connection.execute("""
+            SELECT MIN(p.provider_item_id)
+            FROM library_items e
+            JOIN item_provider_ids p ON p.item_id = e.item_id AND p.provider = 'imdb'
+            WHERE e.item_type = 'Episode' AND NOT EXISTS (
+                SELECT 1 FROM library_items s
+                JOIN item_provider_ids t ON t.item_id = s.item_id AND t.provider = 'tmdb'
+                WHERE s.item_id = e.series_id
+            )
+            GROUP BY lower(e.series_name)
+            HAVING MIN(p.provider_item_id) NOT IN (SELECT imdb_id FROM tmdb_imdb_lookups WHERE looked_up_at >= ?)
+        """, [cutoff])]
+        done = 0
+        for imdb_id in todo:
+            try:
+                found = find_by_imdb_id_func(imdb_id)
+            except Exception as e:
+                print(f"[SQLiteConnector] WARN: TMDB lookup failed for {imdb_id}: {e}", file=sys.stderr)
+                continue
+            self._connection.execute(
+                "INSERT OR REPLACE INTO tmdb_imdb_lookups VALUES (?, ?, ?, ?)",
+                (imdb_id, *(found or (None, None)), datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+            )
+            done += 1
+        self._connection.commit()
+        if self._debug and todo: print(f"[SQLiteConnector] TMDB show lookups from episodes: {done}/{len(todo)}")
+        return done
+
+    def get_tmdb_title_details(self) -> pd.DataFrame:
+        """
+        Returns the found TMDB title details, with list columns decoded, plus `emby_imdb_id`: the IMDB ID Emby has for
+        the same title (preferred over TMDB's own `imdb_id`, since it's what watch history is linked through)
+        """
+        if self._connection is None or not self._ensure_tmdb_title_details_schema():
+            return pd.DataFrame()
+        type_case = " ".join(f"WHEN '{emby}' THEN '{tmdb}'" for emby, tmdb in self.TMDB_MEDIA_TYPES.items())
+        df = pd.read_sql_query(f"""
+            SELECT d.*, (
+                SELECT MIN(imdb.provider_item_id)
+                FROM item_provider_ids tmdb
+                JOIN library_items l ON l.item_id = tmdb.item_id
+                JOIN item_provider_ids imdb ON imdb.item_id = tmdb.item_id AND imdb.provider = 'imdb'
+                WHERE tmdb.provider = 'tmdb' AND CAST(tmdb.provider_item_id AS INTEGER) = d.tmdb_id
+                  AND CASE l.item_type {type_case} END = d.media_type
+            ) AS emby_imdb_id
+            FROM tmdb_title_details d WHERE d.found = 1
+        """, self._connection)
+        for col in ("genres", "keywords", "people"):
+            df[col] = df[col].map(json.loads)
+        return df
 
 
     # ====================================================================== User aliases ======================================================================

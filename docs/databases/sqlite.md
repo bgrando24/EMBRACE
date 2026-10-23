@@ -44,6 +44,26 @@ Note: Emby item IDs are not stable across a server rebuild - the server was rebu
 
 Populate them with `SQLiteConnector.ingest_tmdb_movie_tv_genres(...)` so `item_genres` can map Emby names to canonical TMDB IDs. When a genre label is missing from the TMDB response, the connector falls back to the deterministic hash strategy described above.
 
+## TMDB title details
+
+Content metadata for recommendations (`ContentKNN`), filled incrementally by `SQLiteConnector.ingest_tmdb_title_details(TMDB.fetch_title_details, TMDB.find_by_imdb_id)`, which the daily refresh runs.
+
+- `tmdb_title_details`: one row per `(media_type, tmdb_id)`, with `media_type` being `movie` or `tv`.
+  - Columns: `imdb_id` (TMDB's), `title`, `overview`, `original_language`, `collection` (movie franchise).
+  - JSON list columns: `genres`, `keywords` and `people` (`{id, name, role}`, role being cast/director/writer/creator).
+  - `found = 0` records a TMDB 404, so a dead ID isn't retried every day.
+  - `fetched_at` drives refreshes.
+- `tmdb_imdb_lookups`: IMDB ID -> `(media_type, tmdb_id)` from TMDB's `/find`, with a NULL `tmdb_id` when nothing was found.
+  - Used for shows that only appear through their episodes: removed from the library, or their Emby series ID changed on the rebuild.
+  - One episode IMDB ID is looked up per series name.
+
+Which titles get fetched:
+- Every library movie and series with a TMDB provider ID (removed ones included, since they're in watch history), plus every show found through a lookup.
+- Titles without details go first, and details older than 90 days are refetched.
+- The first run is ~600 requests (~3 min); after that, only new titles.
+
+Read the details with `get_tmdb_title_details()`, or `PreProcess.get_title_content()` for model input.
+
 ## Watch history tables
 
 The watch-history pipeline converts raw Emby playback events into progressively richer aggregates.

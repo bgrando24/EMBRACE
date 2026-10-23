@@ -3,7 +3,7 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from ml import GenreKNN, PreProcess, UserGenreProfiles, title_interest
+from ml import GenreKNN, PreProcess, UserProfiles, title_interest
 from test_genre_knn import rows
 
 TITLES = rows(
@@ -73,7 +73,7 @@ class TestGenreKNNProfile(unittest.TestCase):
             self.knn.profile_vector(["tt-unknown", "tt2"], [1.0, 0.0])
 
 
-class TestUserGenreProfiles(unittest.TestCase):
+class TestUserProfiles(unittest.TestCase):
 
     def setUp(self):
         self.knn = GenreKNN(PreProcess.encode_title_genres(TITLES))
@@ -84,7 +84,7 @@ class TestUserGenreProfiles(unittest.TestCase):
             user_title("tt-tvmovie", "Not In Model", "Movie", 2, runtime_hours=2),
             user_title("tt5", "Comedy Popular", "Movie", 2, runtime_hours=2, user="u2"),
         ])
-        self.profiles = UserGenreProfiles(self.knn, history)
+        self.profiles = UserProfiles(self.knn, history)
 
     def test_profile_titles_skip_abandoned_and_unknown(self):
         self.assertEqual(self.profiles.profile_titles("u1")["imdb_id"].tolist(), ["tt1", "tt2"])

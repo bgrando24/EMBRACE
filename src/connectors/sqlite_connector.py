@@ -1189,6 +1189,65 @@ class SQLiteConnector:
 
 
 
+    # ====================================================================== User aliases ======================================================================
+
+    def _ensure_user_aliases_schema(self) -> bool:
+        """
+        Creates (if doesn't exist) `user_aliases`: maps an Emby user ID to the canonical user ID of the same person.
+
+        Needed because Emby user IDs change when the server is rebuilt (and someone can rename/recreate their account),
+        so one person's history can sit under several user IDs. Users without an alias are their own canonical user.
+        """
+        if self._connection is None or self._cursor is None:
+            print("[SQLiteConnector] ERROR: DB not connected", file=sys.stderr)
+            return False
+        self._cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_aliases(
+                alias_user_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,      -- canonical user ID
+                note TEXT,
+                created_timestamp TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        self._connection.commit()
+        return True
+
+    def set_user_alias(self, alias_user_id: str, user_id: str, note: str | None = None) -> bool:
+        """
+        Records that `alias_user_id` is the same person as the canonical `user_id`.
+
+        Args:
+            alias_user_id (str): The old/other Emby user ID
+            user_id (str): The canonical Emby user ID (usually the current account)
+            note (str, optional): Free text, e.g. why they're the same person
+        """
+        if alias_user_id == user_id:
+            print("[SQLiteConnector] ERROR: A user can't be an alias of itself", file=sys.stderr)
+            return False
+        if not self._ensure_user_aliases_schema():
+            return False
+        # keep it one level deep: the canonical user must not itself be an alias
+        row = self._cursor.execute("SELECT user_id FROM user_aliases WHERE alias_user_id = ?", (user_id,)).fetchone()
+        if row is not None:
+            print(f"[SQLiteConnector] ERROR: {user_id} is itself an alias of {row[0]}, use that as the canonical user", file=sys.stderr)
+            return False
+        self._cursor.execute(
+            "INSERT OR REPLACE INTO user_aliases(alias_user_id, user_id, note) VALUES(?,?,?)",
+            (alias_user_id, user_id, note),
+        )
+        # anything that pointed at the new alias now points at its canonical user
+        self._cursor.execute("UPDATE user_aliases SET user_id = ? WHERE user_id = ?", (user_id, alias_user_id))
+        self._connection.commit()
+        return True
+
+    def get_user_aliases(self) -> pd.DataFrame:
+        """Returns the user_aliases table (alias_user_id, user_id, note) as a pandas DataFrame"""
+        if not self._ensure_user_aliases_schema():
+            exit(1)
+        return pd.read_sql_query("SELECT alias_user_id, user_id, note FROM user_aliases", self._connection)
+
+
+
     # ====================================================================== Table fetch methods ======================================================================
 
     def get_watch_hist_user_items_stats(self) -> pd.DataFrame:

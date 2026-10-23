@@ -219,8 +219,9 @@ class PreProcess:
     def get_user_title_stats(self) -> tuple[pd.DataFrame, pd.DataFrame]:
         """
         Rolls the per user/item watch stats up to per user/IMDB title (episodes -> their series, and the same title
-        under old and new Emby IDs combined).
-        
+        under old and new Emby IDs combined). User IDs are resolved through `user_aliases`, so one person's history
+        under several Emby user IDs is combined under their canonical user ID and current name.
+
         Returns:
             (user_titles, unmatched):
                 user_titles - one row per (user_id, imdb_id) with summed sessions/time/outcomes, mean + best completion,
@@ -230,8 +231,10 @@ class PreProcess:
         """
         stats = self.sqlite.get_watch_hist_user_items_stats()
         users = self.sqlite.get_watch_hist_users()
+        aliases = self.sqlite.get_user_aliases().set_index("alias_user_id")["user_id"]
         mapping = self.map_emby_items_to_imdb()
-        
+
+        stats["user_id"] = stats["user_id"].map(aliases).fillna(stats["user_id"])
         df = stats.merge(mapping, on="item_id", how="left").merge(users, on="user_id", how="left")
         df["match_method"] = df["match_method"].fillna("not_in_library")
         
@@ -239,7 +242,8 @@ class PreProcess:
         unmatched = df.loc[df["imdb_id"].isna(), ["user_id", "user_name", "item_id", "item_type", "match_method", "total_seconds_watched"]]
         
         user_titles = (
-            matched.groupby(["user_id", "user_name", "imdb_id", "unit_type"], as_index=False)
+            # dropna=False: a missing user_name must not silently drop that user's rows
+            matched.groupby(["user_id", "user_name", "imdb_id", "unit_type"], as_index=False, dropna=False)
             .agg(
                 unit_name=("unit_name", "first"),
                 items_watched=("item_id", "nunique"),

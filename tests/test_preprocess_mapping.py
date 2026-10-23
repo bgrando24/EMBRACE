@@ -113,6 +113,54 @@ class TestEmbyImdbMapping(unittest.TestCase):
         self.assertEqual(titles.loc["tt100", "total_sessions"], 2)
         self.assertEqual(set(unmatched["item_id"]), {"gone-ep", "orphan-movie", "channel"})
 
+    def test_user_aliases_combine_history(self):
+        # same person under an old user ID (e.g. before the Emby rebuild), with an old name
+        db = self.pp.sqlite
+        db.ingest_watch_hist_raw_events(lambda d, a: {"old": [event("old-movie", "Movie", "Letterkenny Movie", user="old-name", date="2025-08-20")]})
+        db._connection.execute("UPDATE watch_hist_raw_events SET user_id = 'u0' WHERE user_name = 'old-name'")
+        db._connection.commit()
+        db._INIT_POPULATE_watch_hist_agg_sessions()
+        db._INIT_POPULATE_watch_hist_user_item_stats()
+
+        titles, _ = self.pp.get_user_title_stats()
+        self.assertEqual(set(titles["user_id"]), {"u0", "u1"})
+
+        self.assertTrue(db.set_user_alias("u0", "u1"))
+        titles, _ = self.pp.get_user_title_stats()
+        self.assertEqual(set(titles["user_id"]), {"u1"})
+        self.assertEqual(set(titles["user_name"]), {"u1"})    # canonical user's current name
+        self.assertEqual(titles.set_index("imdb_id").loc["tt100", "total_sessions"], 3)
+
+
+class TestUserAliases(unittest.TestCase):
+
+    def setUp(self):
+        self._old_cwd = os.getcwd()
+        self._tmp = tempfile.TemporaryDirectory()
+        os.chdir(self._tmp.name)
+        self.db = SQLiteConnector("test.db")
+        self.db.connect_db()
+
+    def tearDown(self):
+        self.db._connection.close()
+        os.chdir(self._old_cwd)
+        self._tmp.cleanup()
+
+    def aliases(self):
+        return dict(self.db.get_user_aliases()[["alias_user_id", "user_id"]].itertuples(index=False))
+
+    def test_self_alias_rejected(self):
+        self.assertFalse(self.db.set_user_alias("a", "a"))
+
+    def test_canonical_user_cannot_be_an_alias(self):
+        self.db.set_user_alias("a", "b")
+        self.assertFalse(self.db.set_user_alias("c", "a"))
+
+    def test_existing_aliases_follow_a_newly_aliased_canonical(self):
+        self.db.set_user_alias("a", "b")
+        self.db.set_user_alias("b", "c")
+        self.assertEqual(self.aliases(), {"a": "c", "b": "c"})
+
 
 if __name__ == "__main__":
     unittest.main()

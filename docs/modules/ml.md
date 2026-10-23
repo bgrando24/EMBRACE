@@ -31,7 +31,12 @@ Episodes are resolved in order of confidence, recorded in `match_method`:
 
 Returns `(user_titles, unmatched)`. `user_titles` rolls `watch_hist_user_item_stats` up to one row per `(user_id, imdb_id)`: all episodes of a series, and the same title under old and new Emby IDs, are combined (summed sessions/seconds/outcomes, mean and best completion, `items_watched`, first/last watched). `unmatched` lists the user/item rows that couldn't be linked, with the reason - check it rather than assuming full coverage.
 
-Note: user IDs also changed when the Emby server was rebuilt, so the same person can appear under two `user_id`s.
+User IDs also changed when the Emby server was rebuilt, so the same person can appear under several `user_id`s. These are combined through the SQLite `user_aliases` table (alias user ID -> canonical user ID): `user_titles` is keyed by the canonical user and shows their current name. Manage aliases with:
+
+```sh
+PYTHONPATH=src python scripts/sqlite/set_user_alias.py --list                      # user IDs in the history + current aliases
+PYTHONPATH=src python scripts/sqlite/set_user_alias.py <old id> <canonical id> --note "..."
+```
 
 ### `imdb_get_encoded_genres(cache_path, refresh=False)`
 

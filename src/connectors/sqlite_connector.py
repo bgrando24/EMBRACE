@@ -936,9 +936,9 @@ class SQLiteConnector:
         INSERT OR REPLACE INTO library_items(
             item_id, item_name, item_type,
             series_name, series_id, season_number, episode_number,
-            runtime_ticks, premiere_date, overview, community_rating, production_year,
+            runtime_ticks, premiere_date, date_created, overview, community_rating, production_year,
             file_path, container, video_codec, resolution_width, resolution_height
-        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """
 
         upsert_genre_sql = """
@@ -1008,6 +1008,7 @@ class SQLiteConnector:
                         item.get("IndexNumber"),         # episode number
                         item.get("RunTimeTicks"),
                         item.get("PremiereDate"),
+                        item.get("DateCreated"),         # when it was added to the library
                         item.get("Overview"),
                         item.get("CommunityRating"),
                         item.get("ProductionYear"),
@@ -1467,6 +1468,6 @@ class SQLiteConnector:
             print("[SQLiteConnector] ERROR: DB not connected", file=sys.stderr)
             exit(1)
         return pd.read_sql_query(
-            "SELECT item_id, item_name, item_type, series_id, series_name, production_year, runtime_seconds, removed_at FROM library_items",
+            "SELECT item_id, item_name, item_type, series_id, series_name, production_year, runtime_seconds, date_created, removed_at FROM library_items",
             self._connection,
         )

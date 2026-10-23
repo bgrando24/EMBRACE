@@ -91,7 +91,7 @@ class TestEvaluate(unittest.TestCase):
     def test_leave_one_out_ranks_held_out_title_and_excludes_the_rest(self):
         knn = ContentKNN(CONTENT)
         scope = {t for t in CONTENT["t_const"] if t in knn}
-        res = leave_one_out(profile_ranker(knn, scope), self.history(), scope, scope).set_index("imdb_id")
+        res = leave_one_out(profile_ranker(knn), self.history(), scope, scope).set_index("imdb_id")
         self.assertEqual(sorted(res.index), ["tt1", "tt2"])        # abandoned tt5 is never held out
         self.assertEqual(res["rank"].tolist(), [1, 1])            # each half of the franchise finds the other
         self.assertEqual(res["n_ranked"].tolist(), [len(scope) - 2] * 2)   # minus the other two watched titles
@@ -99,7 +99,7 @@ class TestEvaluate(unittest.TestCase):
     def test_popularity_and_summary(self):
         votes = CONTENT.set_index("t_const")["num_votes"]
         scope = set(CONTENT["t_const"])
-        res = leave_one_out(popularity_ranker(votes, scope), self.history(), scope, scope).set_index("imdb_id")
+        res = leave_one_out(popularity_ranker(votes), self.history(), scope, scope).set_index("imdb_id")
         # by votes: tt3, tt5 (excluded), tt1, tt4, ... -> tt1 is 2nd, tt2 (10 votes) is 5th
         self.assertEqual(res["rank"].to_dict(), {"tt1": 2, "tt2": 5})
         s = summarise(res.reset_index(), k=2)

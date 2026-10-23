@@ -170,6 +170,25 @@ class PreProcess:
         return out
 
 
+    def get_title_additions(self) -> pd.DataFrame:
+        """
+        When each library item was added to Emby, against the IMDB title it counts towards (episodes -> their series,
+        see `map_emby_items_to_imdb()`), for `Freshness`.
+
+        Returns:
+            DataFrame: item_id, item_type, t_const, added_at (Emby DateCreated - NULL for items removed before it was stored)
+        """
+        lib = self.sqlite.get_library_items()
+        lib = lib[lib["item_type"].isin(["Movie", "Series", "Episode"])]
+        units = self.map_emby_items_to_imdb(use_imdb_episodes=False).set_index("item_id")["imdb_id"]
+        return pd.DataFrame({
+            "item_id": lib["item_id"],
+            "item_type": lib["item_type"],
+            "t_const": lib["item_id"].map(units),
+            "added_at": pd.to_datetime(lib["date_created"], utc=True, errors="coerce"),
+        }).reset_index(drop=True)
+
+
     def map_emby_items_to_imdb(self, use_imdb_episodes: bool = True) -> pd.DataFrame:
         """
         Maps every watched or library Emby item to the IMDB title it should be recommended/learned as.

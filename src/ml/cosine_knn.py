@@ -135,6 +135,7 @@ class CosineKNN:
         allowed: Optional[Iterable[str]] = None,
         types: Optional[Iterable[str]] = None,
         exclude: Optional[Iterable[str]] = None,
+        boost: Optional[pd.Series] = None,
     ) -> pd.DataFrame:
         """
         Returns the `n` titles closest to a taste profile (see `profile_vector()`), ranked like `recommend()`.
@@ -143,19 +144,29 @@ class CosineKNN:
             profile (ndarray): output of `profile_vector()`
             n, allowed, types: as for `recommend()`
             exclude (Iterable[str], optional): never recommend these IMDB IDs, e.g. titles the user already watched
+            boost (Series, optional): t_const -> amount added to the similarity before ranking (e.g. a freshness
+                boost, see `Freshness.boost()`); titles not in it get 0
 
         Returns:
             DataFrame: OUTPUT_COLS + `similarity` (cosine, 0-1) + `genres` (the title's genres)
+            + `boost` and `score` (similarity + boost, what was ranked on) when a boost is given
         """
         similarity = self._dot(profile)
+        extra = np.zeros(len(self.titles), dtype=np.float64)
+        if boost is not None:
+            boost = boost[boost.index.isin(self._row_of.index)]
+            extra[self._row_of[boost.index].to_numpy()] = boost.to_numpy(dtype=float)
         mask = self._filter_mask(allowed, types)
         if exclude is not None:
             mask &= ~np.isin(self._ids, np.fromiter(exclude, dtype=object).astype(str))
-        top, similarity = self._rank(similarity, mask, n)
+        top, score = self._rank(similarity + extra, mask, n)
 
         out = self.titles.loc[top, self.OUTPUT_COLS].copy()
-        out["similarity"] = similarity[top]
+        out["similarity"] = np.round(similarity[top], 6)
         out["genres"] = [self.genres_of(self._ids[j]) for j in top]
+        if boost is not None:
+            out["boost"] = np.round(extra[top], 6)
+            out["score"] = score[top]
         return out.reset_index(drop=True)
 
     def _dot(self, vector) -> np.ndarray:

@@ -2,6 +2,9 @@ services:
   db:
     image: mysql:9.4.0
     container_name: embrace-mysql
+    # run as the image's mysql user: as root, the entrypoint tries to chown the --secure-file-priv dir (/import),
+    # which fails on the read-only mount and crash-loops the container. The TSVs only need to be world-readable.
+    user: "999:999"
     ports:
       # localhost only by default; reach it from another machine with an SSH tunnel (see README),
       # or set MYSQL_BIND_ADDRESS in .env to publish it on a LAN/Tailscale address instead

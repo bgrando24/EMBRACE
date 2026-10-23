@@ -29,7 +29,7 @@ Episodes are resolved in order of confidence, recorded in `match_method`:
 
 ### `get_user_title_stats()`
 
-Returns `(user_titles, unmatched)`. `user_titles` rolls `watch_hist_user_item_stats` up to one row per `(user_id, imdb_id)`: all episodes of a series, and the same title under old and new Emby IDs, are combined (summed sessions/seconds/outcomes, mean and best completion, `items_watched`, first/last watched). `unmatched` lists the user/item rows that couldn't be linked, with the reason - check it rather than assuming full coverage.
+Returns `(user_titles, unmatched)`. `user_titles` rolls `watch_hist_user_item_stats` up to one row per `(user_id, imdb_id)`: all episodes of a series, and the same title under old and new Emby IDs, are combined (summed sessions/seconds/outcomes, mean and best completion, `items_watched`, first/last watched, and `runtime_seconds` for movies). `unmatched` lists the user/item rows that couldn't be linked, with the reason - check it rather than assuming full coverage.
 
 User IDs also changed when the Emby server was rebuilt, so the same person can appear under several `user_id`s. These are combined through the SQLite `user_aliases` table (alias user ID -> canonical user ID): `user_titles` is keyed by the canonical user and shows their current name. Manage aliases with:
 
@@ -69,4 +69,38 @@ knn.recommend("tt4647692", n=10, allowed=pp.get_library_imdb_ids()) # only title
 
 **Known limitation**: genre alone can't separate e.g. Letterkenny's dry humour from a broad comedy - Letterkenny and The Office get identical recommendations. This is the baseline that richer features (descriptions, people, style tags) should be measured against.
 
-Demo: `PYTHONPATH=src python src/ml/main.py [IMDB ID ...]`
+`profile_vector(t_consts, weights)` and `recommend_for_profile(profile, n, allowed, types, exclude)` do the same for a weighted blend of titles instead of one seed - see `UserGenreProfiles`. `recommend_for_profile()` returns `genres` (the title's own genres) instead of `shared_genres`.
+
+## **Class:** UserGenreProfiles
+
+Per-user recommendations from watch history ("based on everything you've watched"). Each user's taste profile is the interest-weighted sum of the genre vectors of what they watched; recommendations are the unwatched titles closest to it (cosine), ordered and tie-broken like `GenreKNN.recommend()`.
+
+```python
+from ml import PreProcess, GenreKNN, UserGenreProfiles
+
+pp = PreProcess()
+user_titles, _ = pp.get_user_title_stats()
+profiles = UserGenreProfiles(GenreKNN(pp.imdb_get_encoded_genres()), user_titles)
+profiles.users()                                                  # user_id, user_name, titles watched / in profile, hours
+profiles.genre_shares(user_id)                                    # readable summary of the profile, e.g. Comedy 27%, Drama 18%
+profiles.profile_titles(user_id)                                  # the titles that shape it, highest interest first
+profiles.recommend(user_id, n=10, allowed=pp.get_library_imdb_ids())
+```
+
+**Interest** (`title_interest()`) - how much a title says about someone's taste, from how much of it they watched:
+
+| Unit | Interest | Examples |
+| --- | --- | --- |
+| Movie | Fraction of the runtime watched, in total across all sessions, capped at 1 | Finished = 1, watched half = 0.5, rewatched = still 1 |
+| Series | `log2(1 + hours / 2)` | 2 h = 1 (one finished movie), 6 h = 2, 14 h = 3, 135 h = 6.1 |
+
+- Per-session completion isn't used: a movie watched over three evenings is three "partial" sessions, but was finished. Movies with no known runtime assume 2 hours.
+- The log for series keeps one long binge from drowning out everything else, while still counting it the most.
+- Titles under 0.1 (e.g. a movie opened for a few minutes) are left out of the profile, but like everything else the user has watched, they're never recommended back. There are no negative signals: abandoning one title says little about its genres.
+- Titles the genre model doesn't cover (IMDB types other than movie/tvSeries/tvMiniSeries, e.g. `tvMovie`) are skipped; `users()` shows how many titles shape each profile.
+
+**`because_you_watched`** on each recommendation is the profile title with the most similar genres, ties going to the higher-interest title (None if no genre is shared). It deliberately ignores interest otherwise, or a long binge would "explain" anything that shares one genre with it.
+
+**Known limitation**: the same as `GenreKNN`, amplified. On the current library, many unwatched titles share the most common profile genres (e.g. `Action, Crime, Drama`), so the popularity tie-break picks the list and two users with similar profiles get the same recommendations. Profiles with less common genre mixes get more distinct results.
+
+Demo: `PYTHONPATH=src python src/ml/main.py [IMDB ID ...]` - title-based recommendations for the given IDs, then per-user recommendations from the Emby library.

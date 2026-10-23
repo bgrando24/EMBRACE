@@ -1,6 +1,6 @@
 import sys
 import pandas as pd
-from ml import PreProcess, GenreKNN
+from ml import PreProcess, GenreKNN, UserGenreProfiles
 
 # usage (from project root): PYTHONPATH=src python src/ml/main.py [IMDB ID ...]
 # e.g. PYTHONPATH=src python src/ml/main.py tt4647692     (Letterkenny)
@@ -31,14 +31,13 @@ for seed in seeds:
     print(knn.recommend(seed, n=10, allowed=library).to_string(index=False))
 
 
-# ------------- user watch history-based recommendations
-
-# collect the set of titles they’ve watched from Emby: pp.get_user_title_stats() (one row per user + IMDB title)
-# grab their vectors from X, build a weighted average user vector:
-# watched_idx = [ ... ]  # indices of titles watched
-# weights = [ ... ]      # e.g. completion ratio, minutes watched
-
-# user_vec = np.average(X[watched_idx], axis=0, weights=weights)
-# user_vec = user_vec / np.linalg.norm(user_vec)  # normalize
-
-# # query with this user vector: similarity = knn._X @ user_vec, then rank as in GenreKNN.recommend()
+# ------------- watch history-based recommendations -> "based on everything you've watched, try these."
+user_titles, _ = pp.get_user_title_stats()
+profiles = UserGenreProfiles(knn, user_titles)
+print("\n=== Users")
+print(profiles.users().drop(columns="user_id").round(1).to_string(index=False))
+for user_id, user_name in profiles.users()[["user_id", "user_name"]].itertuples(index=False):
+    shares = profiles.genre_shares(user_id).head(5)
+    print(f"\n=== {user_name} - " + ", ".join(f"{g} {s:.0%}" for g, s in shares.items()))
+    recs = profiles.recommend(user_id, n=10, allowed=library)
+    print(recs.drop(columns=["type", "genres"]).to_string(index=False))

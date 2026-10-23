@@ -29,11 +29,6 @@ print(all_user_hist)
 
 # # test db connection and watch history tables
 sqlite = SQLiteConnector(SQLITE_DB_NAME, debug=True)
-try:
-    os.remove("sqlite_db/bgmd_db.db")
-except:
-    pass
-
 sqlite.connect_db()
 
 # # ingest library metadata first so runtime is available for later calculations
@@ -42,7 +37,8 @@ ok = sqlite.ingest_all_library_items(Emby.iter_all_items(), Emby.get_item_metada
 print("Ingest complete:", ok)
 
 # # process watch history using actual runtimes
-sqlite._INIT_POPULATE_watch_hist_raw_events(Emby.get_all_watch_hist)
+# incremental: Playback Reporting only keeps ~90 days, so never drop the raw events table
+sqlite.ingest_watch_hist_raw_events(Emby.get_all_watch_hist)
 sqlite._INIT_POPULATE_watch_hist_agg_sessions()
 sqlite._INIT_POPULATE_watch_hist_user_item_stats()
 sqlite.update_completion_ratios()

@@ -32,7 +32,8 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 PROJECT_ROOT="$(realpath "${SCRIPT_DIR}/../..")"
 # path of python script to run, relative to project root
 PY_SCRIPT="${PROJECT_ROOT}/scripts/sqlite/emby_refresh_watch_hist.py"
-
+PYTHONPATH_VALUE="${PROJECT_ROOT}/src:${PYTHONPATH:-}"
+export PYTHONPATH="${PYTHONPATH_VALUE}"
 
 
 
@@ -106,7 +107,7 @@ remove_cron_block() {
 
 # command that cron will run: cd into project, run python, log output
 build_job_command() {
-  local cmd core="cd \"$PROJECT_ROOT\" && \"$PYTHON\" \"$PY_SCRIPT\""
+  local cmd core="cd \"$PROJECT_ROOT\" && PYTHONPATH=\"$PYTHONPATH_VALUE\" \"$PYTHON\" \"$PY_SCRIPT\""
   if [[ -n "$FLOCK_BIN" ]]; then
     cmd="$FLOCK_BIN -n \"$LOCK_FILE\" /bin/bash -lc '$core >> \"$OUT_LOG\" 2>> \"$ERR_LOG\"'"
   else
@@ -166,4 +167,3 @@ case "${1:-}" in
   --run)     run_once_now ;;
   *)         install_cron_block ;;
 esac
-

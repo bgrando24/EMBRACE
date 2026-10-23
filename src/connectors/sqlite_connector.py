@@ -67,24 +67,31 @@ class SQLiteConnector:
                 return stream.get('Codec', '')
         return ''
     
-    def prune_missing_items(self, current_ids: set[str]) -> int:
+    def mark_removed_items(self, current_ids: set[str]) -> int:
         """
-        Delete library rows not in current_ids. Returns rows deleted, or -1 if error. 
+        Flags library rows not in current_ids as removed (sets `removed_at`) rather than deleting them,
+        so watch history for titles that have left Emby keeps its runtime, genres and provider IDs.
+        Returns rows newly flagged, or -1 if error.
         """
         if self._connection is None or self._cursor is None:
             print("[SQLiteConnector] ERROR: DB not connected", file=sys.stderr)
+            return -1
+
+        # an empty fetch almost certainly means the Emby request failed, not that the library is empty
+        if not current_ids:
+            print("[SQLiteConnector] ERROR: No current item IDs given, refusing to flag the whole library as removed", file=sys.stderr)
             return -1
 
         # Coerce to str to avoid int-vs-str mismatches
         current_ids = {str(i) for i in current_ids}
 
         self._connection.execute("BEGIN")
-        self._cursor.execute("SELECT item_id FROM library_items")
+        self._cursor.execute("SELECT item_id FROM library_items WHERE removed_at IS NULL")
         existing = {str(row[0]) for row in self._cursor.fetchall()}
 
-        to_delete = existing - current_ids
-        if to_delete:
-            # Optional: chunk to avoid huge parameter lists
+        to_flag = existing - current_ids
+        if to_flag:
+            # chunk to avoid huge parameter lists
             def chunks(iterable, size=500):
                 it = iter(iterable)
                 while True:
@@ -93,14 +100,11 @@ class SQLiteConnector:
                         break
                     yield batch
 
-            for batch in chunks(to_delete, 500):
-                self._cursor.executemany("DELETE FROM item_provider_ids WHERE item_id = ?", [(i,) for i in batch])
-                self._cursor.executemany("DELETE FROM item_genres       WHERE item_id = ?", [(i,) for i in batch])
-                self._cursor.executemany("DELETE FROM item_tags         WHERE item_id = ?", [(i,) for i in batch])
-                self._cursor.executemany("DELETE FROM library_items     WHERE item_id = ?", [(i,) for i in batch])
+            for batch in chunks(to_flag, 500):
+                self._cursor.executemany("UPDATE library_items SET removed_at = CURRENT_TIMESTAMP WHERE item_id = ?", [(i,) for i in batch])
 
         self._connection.commit()
-        return len(to_delete)
+        return len(to_flag)
 
     
     
@@ -202,6 +206,9 @@ class SQLiteConnector:
             
             # indexes for each table
             self._cursor.execute("CREATE INDEX IF NOT EXISTS idx_watch_hist_raw_user_time ON watch_hist_raw_events(user_id, date, time DESC)")
+            # event identity, so re-fetching overlapping history doesn't duplicate rows
+            # duration is part of the key: Playback Reporting can log a 0s stub and the real play with the same timestamp
+            self._cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_watch_hist_raw_event ON watch_hist_raw_events(user_id, item_id, date, time, duration)")
             self._cursor.execute("CREATE INDEX IF NOT EXISTS idx_watch_hist_agg_sessions ON watch_hist_agg_sessions(user_id, session_end_timestamp DESC)")
             self._cursor.execute("CREATE INDEX IF NOT EXISTS idx_watch_hist_agg_item ON watch_hist_agg_sessions(item_id)")
             self._cursor.execute("CREATE INDEX IF NOT EXISTS idx_watch_hist_user_item_stats ON watch_hist_user_item_stats(user_id, adherence_score DESC)")
@@ -271,22 +278,105 @@ class SQLiteConnector:
             self._INIT_create_user_watch_hist_schemas()
         except sqlite3.Error as e:
             if self._debug: print(f"[SQLiteConnector] ERROR: Failed to DROP watch_hist_raw_events table: {e}", file=sys.stderr)
-            return False 
-        
+            return False
+
+        if self._debug: print("[SQLiteConnector] Fetching watch history from Emby for all users")
+        raw_events_data = self._prepare_watch_hist_rows(emby_watch_hist_func(2000, False))
+
+        # bulk rows insert
+        try:
+            # don't wait for data to be fullly written to disk: https://www.sqlite.org/pragma.html#pragma_synchronous
+            self._cursor.execute("PRAGMA synchronous = OFF")
+            # store rollback journal in RAM instead of disk: https://www.sqlite.org/pragma.html#pragma_journal_mode
+            self._cursor.execute("PRAGMA journal_mode = MEMORY")
+            # make all inserts an atomic transaction (either all records succeed, or none)
+            self._cursor.execute("BEGIN TRANSACTION")
+
+            self._cursor.executemany(
+                """INSERT OR IGNORE INTO watch_hist_raw_events
+                (date, time, user_id, item_name, item_id, item_type,
+                    duration, remote_address, user_name)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                raw_events_data
+            )
+
+            self._connection.commit()
+
+            # reset pragmas
+            self._cursor.execute("PRAGMA synchronous = NORMAL")
+            self._cursor.execute("PRAGMA journal_mode = DELETE")
+
+            if self._debug:
+                print(f"[SQLiteConnector] Successfully inserted {len(raw_events_data)} watch events!")
+
+        except sqlite3.Error as e:
+            print(f"[SQLiteConnector] ERROR during bulk insert: {e}", file=sys.stderr)
+            self._connection.rollback()
+            return False
+
+        return True
+# -----------------------
+
+
+    def ingest_watch_hist_raw_events(self, emby_watch_hist_func: Callable[[int, bool], T_EmbyAllUserWatchHist], num_days: int = 2000) -> int:
+        """
+        Incrementally adds new watch history events to `watch_hist_raw_events`, keeping everything already stored.
+
+        Playback Reporting only retains a limited window of history (~90 days as of Oct 2026), so older events
+        only exist in our own database - this is the method to use for scheduled refreshes, NOT the `_INIT_` version.
+        Events already present (same user, item, date, time and duration) are skipped.
+
+        Args:
+            emby_watch_hist_func (() -> T_EmbyAllUserWatchHist): Emby connector function that fetches all user watch history
+            num_days (int, optional): Number of days of history to request from Emby - DEFAULT: 2000
+
+        Returns:
+            int: Number of new events inserted, or -1 on error
+        """
+        if self._connection is None or self._cursor is None:
+            print("[SQLiteConnector] ERROR: DB not connected", file=sys.stderr)
+            return -1
+
+        # also creates the uniqueness index on older databases that predate it
+        if not self._INIT_create_user_watch_hist_schemas():
+            return -1
+
+        if self._debug: print(f"[SQLiteConnector] Fetching last {num_days} days of watch history from Emby for all users")
+        raw_events_data = self._prepare_watch_hist_rows(emby_watch_hist_func(num_days, False))
+
+        try:
+            changes_before = self._connection.total_changes
+            self._cursor.execute("BEGIN TRANSACTION")
+            self._cursor.executemany(
+                """INSERT OR IGNORE INTO watch_hist_raw_events
+                (date, time, user_id, item_name, item_id, item_type,
+                    duration, remote_address, user_name)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                raw_events_data
+            )
+            self._connection.commit()
+            inserted = self._connection.total_changes - changes_before
+        except sqlite3.Error as e:
+            print(f"[SQLiteConnector] ERROR during incremental insert: {e}", file=sys.stderr)
+            self._connection.rollback()
+            return -1
+
+        if self._debug: print(f"[SQLiteConnector] Fetched {len(raw_events_data)} events, {inserted} were new")
+        return inserted
+# -----------------------
+
+
+    def _prepare_watch_hist_rows(self, all_usr_hist: T_EmbyAllUserWatchHist) -> list[list]:
+        """
+        Transforms the Emby watch history response into rows matching the `watch_hist_raw_events` schema.
+
+        NOTE: handles the timezone cutoff where Playback Reporting switched from PDT to Melbourne time.
+        This is applied to the source values as fetched, so it's safe to run repeatedly.
+        """
         # when Emby watch history timezone was corrected from PDT to Melbourne (UTC+10)
         TIMEZONE_CUTOFF = datetime.strptime("2025-08-15 11:10:00", "%Y-%m-%d %H:%M:%S")
-            
-        if self._debug: 
-            print("[SQLiteConnector] Fetching watch history from Emby for all users")
-            print(f"[SQLiteConnector] Will adjust PDT timestamps before {TIMEZONE_CUTOFF} to Melbourne time (+17 hours)")
-            
-        
-        # TODO: how to better handle the number of days of watch history to fetch? e.g. exp backfill
-        # prep raw data for bulk insert -> transform into tuples for better insertion
-        # see the watch_hist_raw_events schema for reference as to how the table is structured
-        all_usr_hist = emby_watch_hist_func(2000, False)
         raw_events_data = []
-        
+
         for username, data in all_usr_hist.items():
             for event in data:
                 event_date = event["date"]
@@ -323,39 +413,8 @@ class SQLiteConnector:
             
             if self._debug:
                 print(f"  Found {len(data)} events for user: {username}")
-        
-        # bulk rows insert
-        try:
-            # don't wait for data to be fullly written to disk: https://www.sqlite.org/pragma.html#pragma_synchronous
-            self._cursor.execute("PRAGMA synchronous = OFF")
-            # store rollback journal in RAM instead of disk: https://www.sqlite.org/pragma.html#pragma_journal_mode
-            self._cursor.execute("PRAGMA journal_mode = MEMORY")
-            # make all inserts an atomic transaction (either all records succeed, or none)
-            self._cursor.execute("BEGIN TRANSACTION")
-            
-            self._cursor.executemany(
-                """INSERT OR IGNORE INTO watch_hist_raw_events 
-                (date, time, user_id, item_name, item_id, item_type, 
-                    duration, remote_address, user_name)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                raw_events_data
-            )
-            
-            self._connection.commit()
-            
-            # reset pragmas
-            self._cursor.execute("PRAGMA synchronous = NORMAL")
-            self._cursor.execute("PRAGMA journal_mode = DELETE")
-            
-            if self._debug:
-                print(f"[SQLiteConnector] Successfully inserted {len(raw_events_data)} watch events!")
-                            
-        except sqlite3.Error as e:
-            print(f"[SQLiteConnector] ERROR during bulk insert: {e}", file=sys.stderr)
-            self._connection.rollback()
-            return False
-        
-        return True
+
+        return raw_events_data
 # -----------------------
 
 
@@ -761,7 +820,8 @@ class SQLiteConnector:
                 
                 -- Timestamps
                 last_updated TEXT DEFAULT CURRENT_TIMESTAMP,
-                
+                removed_at TEXT,  -- set when the item disappears from Emby, NULL while it's still in the library
+
                 UNIQUE(item_id)
             )
         """
@@ -805,7 +865,12 @@ class SQLiteConnector:
             self._cursor.execute(SCHEMA_library_items)
             self._cursor.execute(SCHEMA_item_genres)
             self._cursor.execute(SCHEMA_item_tags)
-            
+
+            # migrate databases created before library_items had removed_at
+            library_cols = {row[1] for row in self._cursor.execute("PRAGMA table_info(library_items)")}
+            if "removed_at" not in library_cols:
+                self._cursor.execute("ALTER TABLE library_items ADD COLUMN removed_at TEXT")
+
             # indexes
             self._cursor.execute("CREATE INDEX IF NOT EXISTS idx_library_series ON library_items(series_id)")
             self._cursor.execute("CREATE INDEX IF NOT EXISTS idx_library_type ON library_items(item_type)")
@@ -841,6 +906,12 @@ class SQLiteConnector:
         self._cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_provider_provider ON item_provider_ids(provider)"
         )
+        # Emby isn't consistent with provider casing ("IMDB" vs "Imdb"), store them lowercase so joins don't miss rows
+        self._cursor.execute(
+            "UPDATE OR REPLACE item_provider_ids SET provider = lower(provider) WHERE provider != lower(provider)"
+        )
+        self._connection.commit()
+        return True
 # -------------------------------------------
 
 
@@ -946,6 +1017,11 @@ class SQLiteConnector:
                     )
                 )
 
+                # clear child rows so re-ingesting an item replaces its genres/tags/IDs instead of accumulating them
+                cur.execute("DELETE FROM item_genres WHERE item_id = ?", (item_id,))
+                cur.execute("DELETE FROM item_tags WHERE item_id = ?", (item_id,))
+                cur.execute("DELETE FROM item_provider_ids WHERE item_id = ?", (item_id,))
+
                 # genres (prefer object form; fallback to name list and TMDB mapping)
                 added_genre_names = set()
                 for g in item.get("GenreItems", []) or []:
@@ -1022,7 +1098,7 @@ class SQLiteConnector:
                 # ProviderIds (TMDB/IMDB/TVDB etc.)
                 for provider, pid in (item.get("ProviderIds") or {}).items():
                     if pid:
-                        cur.execute(upsert_provider_sql, (item_id, provider, str(pid)))
+                        cur.execute(upsert_provider_sql, (item_id, provider.lower(), str(pid)))
 
                 batch += 1
                 if batch % 1000 == 0:
@@ -1031,10 +1107,12 @@ class SQLiteConnector:
 
             self._connection.commit()
             
-            # prune after ingest
-            deleted = self.prune_missing_items(seen)
-            if self._debug: print(f"Pruned {deleted} items no longer in Emby.")
-            
+            # flag items that are no longer in Emby
+            flagged = self.mark_removed_items(seen)
+            if flagged < 0:
+                return False
+            if self._debug: print(f"Flagged {flagged} items no longer in Emby as removed.")
+
             return True
 
         except sqlite3.Error as e:
@@ -1115,14 +1193,24 @@ class SQLiteConnector:
 
     def get_watch_hist_user_items_stats(self) -> pd.DataFrame:
         """Returns the watch_hist_user_item_stats table as a pandas DataFrame"""
-        if self._connection is None or self._cursor is None:
+        if self._connection is None:
             print("[SQLiteConnector] ERROR: DB not connected", file=sys.stderr)
             exit(1)
-        return pd.read_sql_query(self._cursor.execute("SELECT * FROM watch_user_item_stats"), self._connection)
+        return pd.read_sql_query("SELECT * FROM watch_hist_user_item_stats", self._connection)
     
     def get_item_provider_ids(self) -> pd.DataFrame:
         """Returns the item_provider_ids table as a pandas DataFrame"""
-        if self._connection is None or self._cursor is None:
+        if self._connection is None:
             print("[SQLiteConnector] ERROR: DB not connected", file=sys.stderr)
             exit(1)
-        return pd.read_sql_query(self._cursor.execute("SELECT * FROM item_provider_ids"), self._connection)
+        return pd.read_sql_query("SELECT * FROM item_provider_ids", self._connection)
+    
+    def get_library_items(self) -> pd.DataFrame:
+        """Returns the identity columns of library_items (incl. removed items) as a pandas DataFrame"""
+        if self._connection is None:
+            print("[SQLiteConnector] ERROR: DB not connected", file=sys.stderr)
+            exit(1)
+        return pd.read_sql_query(
+            "SELECT item_id, item_name, item_type, series_id, series_name, production_year, removed_at FROM library_items",
+            self._connection,
+        )

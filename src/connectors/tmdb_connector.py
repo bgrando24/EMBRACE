@@ -17,7 +17,7 @@ class TMDBConnector:
         self._debug: Final = debug
         
         if TMDB_READ_ACCESS_TOKEN is None:
-            print("Error: EMBY_API_KEY environment variable is not set.", file=sys.stderr)
+            print("Error: TMDB_READ_ACCESS_TOKEN environment variable is not set.", file=sys.stderr)
             exit(1)
         
         self.__BASE_DOMAIN = "https://api.themoviedb.org/3"

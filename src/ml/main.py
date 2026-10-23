@@ -1,40 +1,39 @@
-from ml import PreProcess
-import numpy as np
-from sklearn.preprocessing import normalize
-from sklearn.neighbors import NearestNeighbors
+import sys
+import pandas as pd
+from ml import PreProcess, GenreKNN
 
-#---- testing ml pre-processing ----
+# usage (from project root): PYTHONPATH=src python src/ml/main.py [IMDB ID ...]
+# e.g. PYTHONPATH=src python src/ml/main.py tt4647692     (Letterkenny)
+
+pd.set_option("display.width", 200)
+pd.set_option("display.max_colwidth", 40)
+
+#---- one row per movie/series, multi-hot encoded genres (cached after the first MySQL fetch) ----
 pp = PreProcess()
-# one hot encode each title with its genre tags
-df = pp.imdb_get_encoded_genres(cache_path="data/cache/imdb_genres_ohe.parquet", refresh=False)
-# print(len(df))
-# print(df.head())
+titles = pp.imdb_get_encoded_genres()
+knn = GenreKNN(titles)
+print(f"Model: {len(knn.titles)} titles, genres: {[g.removeprefix('genre_') for g in knn.genre_cols]}")
 
-# extract OHE columns
-genre_cols = [c for c in df.columns if c.startswith("genre_")]
-X = df[genre_cols].values.astype(np.float32)
-print(f"Size of genre cols: {len(X)}")
-# normalise rows for cosine similarity
-X = normalize(X, norm="l2")
+library = pp.get_library_imdb_ids()
+print(f"Emby library: {len(library)} movies/series with an IMDB ID, {sum(i in knn for i in library)} in the model")
 
-# fit a k-NN model
-knn = NearestNeighbors(metric="cosine", algorithm="brute")
-knn.fit(X)
+# ------------- title-based recommendations -> "because you watched X, here are similar titles."
+seeds = sys.argv[1:] or ["tt4647692"]
+for seed in seeds:
+    if seed not in knn:
+        print(f"\n{seed}: not in the model (unknown, not a movie/series, or has no genres)")
+        continue
+    name = knn.titles.loc[knn.titles["t_const"] == seed, "primary_name"].iloc[0]
+    print(f"\n=== {name} ({seed}) - genres: {knn.genres_of(seed)}")
+    print("-- anywhere on IMDB:")
+    print(knn.recommend(seed, n=10).to_string(index=False))
+    print("-- on the Emby server:")
+    print(knn.recommend(seed, n=10, allowed=library).to_string(index=False))
 
-# ------------- title-based recommendations -> pick a title row, find its neighbours: "because you watched X, here are similar titles."
-# row index
-i = 100000
-distances, indices = knn.kneighbors(X[i].reshape(1, -1), n_neighbors=6)
 
-# indices[0] are the row IDs of nearest neighbours
-# distances[0] are cosine distances (smaller = more similar)
-for rank, j in enumerate(indices[0][1:], start=1):  # skip self
-    print(f"{rank}. {df.loc[j, 'primary_name']} (distance={distances[0][rank]:.3f})")
-    
-    
 # ------------- user watch history-based recommendations
 
-# collect the set of titles they’ve watched from Emby.
+# collect the set of titles they’ve watched from Emby: pp.get_user_title_stats() (one row per user + IMDB title)
 # grab their vectors from X, build a weighted average user vector:
 # watched_idx = [ ... ]  # indices of titles watched
 # weights = [ ... ]      # e.g. completion ratio, minutes watched
@@ -42,5 +41,4 @@ for rank, j in enumerate(indices[0][1:], start=1):  # skip self
 # user_vec = np.average(X[watched_idx], axis=0, weights=weights)
 # user_vec = user_vec / np.linalg.norm(user_vec)  # normalize
 
-# # query the k-NN index with this user vector
-# distances, indices = nn.kneighbors(user_vec.reshape(1, -1), n_neighbors=20)
+# # query with this user vector: similarity = knn._X @ user_vec, then rank as in GenreKNN.recommend()

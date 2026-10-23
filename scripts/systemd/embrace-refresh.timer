@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily EMBRACE Emby watch history refresh
+
+[Timer]
+OnCalendar=*-*-* 03:15
+# run at the next boot if the machine was off at the scheduled time
+Persistent=true
+RandomizedDelaySec=5m
+
+[Install]
+WantedBy=timers.target

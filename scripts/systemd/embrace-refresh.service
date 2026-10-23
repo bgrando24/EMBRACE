@@ -1,0 +1,13 @@
+# Daily EMBRACE refresh: Emby library + new watch history into the SQLite database (see docs/workflows/cron_jobs.md).
+# Installed as a systemd *user* unit; assumes the repo is checked out at ~/src/EMBRACE with a venv at ./venv.
+[Unit]
+Description=EMBRACE: refresh Emby library and watch history database
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/src/EMBRACE
+Environment=PYTHONPATH=%h/src/EMBRACE/src
+ExecStart=%h/src/EMBRACE/venv/bin/python scripts/sqlite/emby_refresh_watch_hist.py
+Nice=10

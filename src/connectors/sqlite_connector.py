@@ -777,7 +777,7 @@ class SQLiteConnector:
 
     def _INIT_create_library_items_schema(self) -> bool:
         """
-        Creates the library_items table for movie/episode metadata
+        Creates the library_items table for movie/series/episode metadata
         """
         
         if self._connection is None:
@@ -791,7 +791,7 @@ class SQLiteConnector:
             CREATE TABLE IF NOT EXISTS library_items (
                 item_id TEXT PRIMARY KEY,
                 item_name TEXT NOT NULL,
-                item_type TEXT NOT NULL,  -- 'Episode' or 'Movie'
+                item_type TEXT NOT NULL,  -- 'Movie', 'Series' or 'Episode'
                 
                 -- Episode-specific fields
                 series_name TEXT,
@@ -917,7 +917,7 @@ class SQLiteConnector:
 
     def ingest_all_library_items(self, emby_items_iterable, get_item_metadata: Optional[Callable[[str], dict]] = None) -> bool:
         """
-        Ingest EVERY Movie/Episode from Emby into library_items (+ genres/tags + provider ids).
+        Ingest EVERY Movie/Series/Episode from Emby into library_items (+ genres/tags + provider ids).
         emby_items_iterable should yield BaseItemDto dicts (see EmbyConnector.iter_all_items()).
         Optionally provide get_item_metadata(item_id: str) to enable series-level genre fallback for Episodes.
         """
@@ -1205,6 +1205,31 @@ class SQLiteConnector:
             exit(1)
         return pd.read_sql_query("SELECT * FROM item_provider_ids", self._connection)
     
+    def get_watch_hist_users(self) -> pd.DataFrame:
+        """Returns each user_id seen in the watch history with its (latest) user_name as a pandas DataFrame"""
+        if self._connection is None:
+            print("[SQLiteConnector] ERROR: DB not connected", file=sys.stderr)
+            exit(1)
+        # SQLite returns user_name from the row holding the MAX() when it's a bare column alongside it
+        users = pd.read_sql_query(
+            """SELECT user_id, user_name, MAX(date || ' ' || time) AS last_seen
+               FROM watch_hist_raw_events GROUP BY user_id""",
+            self._connection,
+        )
+        return users.drop(columns="last_seen")
+    
+    def get_watch_hist_items(self) -> pd.DataFrame:
+        """Returns each item_id seen in the watch history with its (latest) item_name and item_type as a pandas DataFrame"""
+        if self._connection is None:
+            print("[SQLiteConnector] ERROR: DB not connected", file=sys.stderr)
+            exit(1)
+        items = pd.read_sql_query(
+            """SELECT item_id, item_name, item_type, MAX(date || ' ' || time) AS last_seen
+               FROM watch_hist_raw_events GROUP BY item_id""",
+            self._connection,
+        )
+        return items.drop(columns="last_seen")
+
     def get_library_items(self) -> pd.DataFrame:
         """Returns the identity columns of library_items (incl. removed items) as a pandas DataFrame"""
         if self._connection is None:

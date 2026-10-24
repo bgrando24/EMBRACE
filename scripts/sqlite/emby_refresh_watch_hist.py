@@ -1,4 +1,4 @@
-from connectors import SQLiteConnector, EmbyConnector, TMDBConnector
+from connectors import SQLiteConnector, EmbyConnector, TMDBConnector, JellyseerrConnector
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -97,6 +97,22 @@ try:
         tmdb_details = -1
         print(f"[WARN] TMDB title details fetch failed ({e}), continuing with existing details", file=sys.stderr)
 
+    # Emby's own per-user state (played flags, favourites): a snapshot, optional
+    item_states = sqlite.ingest_user_item_states(Emby.get_all_emby_users, Emby.get_user_item_states)
+    if item_states < 0:
+        print("[WARN] Emby user item states fetch failed, keeping the previous snapshot", file=sys.stderr)
+
+    # Jellyseerr requests: optional, only when configured
+    jellyseerr_requests = None
+    if os.getenv("JELLYSEERR_URL") and os.getenv("JELLYSEERR_API_KEY"):
+        try:
+            jellyseerr_requests = sqlite.ingest_jellyseerr_requests(JellyseerrConnector().iter_requests)
+        except Exception as e:
+            print(f"[WARN] Jellyseerr unavailable ({e})", file=sys.stderr)
+            jellyseerr_requests = -1
+        if jellyseerr_requests < 0:
+            print("[WARN] Jellyseerr requests fetch failed, keeping existing requests", file=sys.stderr)
+
     new_events = sqlite.ingest_watch_hist_raw_events(Emby.get_all_watch_hist)
     if new_events < 0:
         fail("watch history ingest")
@@ -122,11 +138,18 @@ for old in backups[KEEP_BACKUPS:]:
     print(f"[INFO] Removed old backup {old.name}")
 
 finished_at = datetime.now(tz=tz).strftime("%Y-%m-%d %H:%M:%S %Z")
-Notifications().discord_send_webhook(
-    f"Cron job: Emby watch history refresh finished at {finished_at}\n"
-    f"New watch events: {new_events}\n"
-    f"TMDB title details fetched: {tmdb_details if tmdb_details >= 0 else 'FAILED'}\n"
-    f"Backup: {backup_path.name if backup_path.exists() else 'none (new database)'}"
-    )
+def status(n: int):
+    return "FAILED" if n < 0 else n
+
+lines = [
+    f"Cron job: Emby watch history refresh finished at {finished_at}",
+    f"New watch events: {new_events}",
+    f"TMDB title details fetched: {status(tmdb_details)}",
+    f"Emby user item states: {status(item_states)}",
+]
+if jellyseerr_requests is not None:
+    lines.append(f"Jellyseerr requests: {status(jellyseerr_requests)}")
+lines.append(f"Backup: {backup_path.name if backup_path.exists() else 'none (new database)'}")
+Notifications().discord_send_webhook("\n".join(lines))
 
 exit(0)

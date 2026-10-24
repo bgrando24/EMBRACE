@@ -16,8 +16,14 @@ library = pp.get_library_imdb_ids()
 print(f"Genre model: {len(genre_knn.titles)} titles. Emby library: {len(library)} movies/series with an IMDB ID")
 
 #---- content model: TMDB keywords, people and descriptions for library titles (fetched by the daily refresh) ----
+# MovieLens (optional, see docs/modules/ml.md): collaborative "people who liked X also liked Y" for movies
 try:
-    knn = ContentKNN(pp.get_title_content(titles))
+    movielens = pp.get_movielens_likers()
+except FileNotFoundError:
+    print("MovieLens not downloaded (scripts/movielens/download_movielens.sh), its block stays empty")
+    movielens = None
+try:
+    knn = ContentKNN(pp.get_title_content(titles, movielens))
     print(f"Content model: {len(knn.titles)} titles, weights {knn.weights}")
 except ValueError as e:
     print(f"Content model unavailable ({e}), using the genre model")
@@ -38,6 +44,8 @@ for seed in seeds:
 # "fresh for you" ranks new arrivals by taste; "back catalogue" is taste alone, which surfaces older titles that
 # Emby's own "Latest" row won't.
 user_titles, _ = pp.get_user_title_stats()
+# titles Emby has marked played but that aren't in the watch history: they fill in profiles and are never recommended
+user_titles = pd.concat([user_titles, pp.get_played_titles(user_titles)], ignore_index=True)
 profiles = UserProfiles(knn, user_titles)
 freshness = Freshness(pp.get_title_additions())
 fresh = freshness.boost() if len(freshness.at()) else None    # no dates until the refresh stores DateCreated

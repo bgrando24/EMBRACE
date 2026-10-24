@@ -110,7 +110,9 @@ class TestEvaluate(unittest.TestCase):
 
     def test_weight_grid_sums_to_one(self):
         grid = weight_grid(0.5)
-        self.assertEqual(len(grid), 10)
+        # ways to split 2 halves over the blocks: one block gets both, or two blocks get one each
+        n = len(ContentKNN.DEFAULT_WEIGHTS)
+        self.assertEqual(len(grid), n + n * (n - 1) // 2)
         self.assertTrue(all(abs(sum(w.values()) - 1) < 1e-9 for w in grid))
 
 

@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import scipy.sparse as sp
 from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.preprocessing import normalize
 
 from .cosine_knn import CosineKNN
 
@@ -19,6 +20,12 @@ class ContentKNN(CosineKNN):
                      (the library is mostly English, so "language: en" would say nothing)
         people       director / writers (movies) or creators (series) and the top-billed cast, by TMDB person ID
         description  words of the TMDB overview (English stop words removed)
+        tmdb_recs    TMDB's "people who liked this also liked" list for the title, plus the title itself: two titles are
+                     similar when TMDB recommends one alongside the other, or recommends the same titles for both -
+                     a collaborative signal from TMDB's users, including titles not on our server
+        movielens    the MovieLens users who liked the movie (rated 4+, see `PreProcess.get_movielens_likers()`):
+                     two movies are similar when the same people liked both - collaborative filtering from 200k
+                     MovieLens users. Movies up to Oct 2023 only; series and newer movies have an empty block
 
     The blocks are combined with `weights`, so the similarity of two titles is the weighted sum of their per-block
     cosine similarities (re-weighted over the blocks a title has, if one is empty).
@@ -27,10 +34,16 @@ class ContentKNN(CosineKNN):
     "based on novel or book"). Tokens found in only one title are dropped, as they can never match anything.
     """
 
-    # chosen by leave-one-out on real watch history (`python -m ml.evaluate --grid`, Oct 2026: 542 titles, 168 held
-    # out). Genre carries almost no signal once keywords are in - every top-10 weighting had genre at 0 - but a little
-    # keeps titles with few keywords sensible and lets explanations mention genres. Re-check as history grows.
-    DEFAULT_WEIGHTS = {"genre": 0.05, "keywords": 0.4, "people": 0.35, "description": 0.2}
+    # chosen with `python -m ml.evaluate` on real watch history (Oct 2026, 566 titles, 178 held out):
+    # - content blocks (--grid): genre carries almost no signal once keywords are in - every top-10 weighting had genre
+    #   at 0 - but a little keeps titles with few keywords sensible and lets explanations mention genres
+    # - movielens at 0.3 (the content blocks scaled to the remaining 0.7): hit@10 0.112 -> 0.135, MRR 0.059 -> 0.070,
+    #   and next-watch MRR 0.182 -> 0.202; MRR rose steadily from 0.1 to 0.5 in both evaluations
+    # - tmdb_recs: no measurable gain at 0.1-0.3 in either evaluation, so off (the data is still fetched)
+    # Re-check as history grows.
+    DEFAULT_WEIGHTS = {
+        "genre": 0.035, "keywords": 0.28, "people": 0.245, "description": 0.14, "tmdb_recs": 0.0, "movielens": 0.3,
+    }
     # blocks shown in explanations, in this order (description words are too noisy to read as a reason; genres go
     # last as they're shared by so many titles)
     EXPLAIN_BLOCKS = (("keywords", "people"), ("genre",))
@@ -61,6 +74,14 @@ class ContentKNN(CosineKNN):
             ],
             # a person counts once per title, whatever their role(s)
             "people": content["people"].map(lambda people: sorted({str(p["id"]) for p in people})),
+            "tmdb_recs": [
+                sorted(set(recs) | {f"{media}:{tmdb_id}"}) if isinstance(recs, list) else []
+                for recs, media, tmdb_id in zip(
+                    content.get("recommendations", pd.Series([None] * len(content))),
+                    content.get("media_type", pd.Series([None] * len(content))),
+                    content.get("tmdb_id", pd.Series([None] * len(content))),
+                )
+            ],
         }
 
         self._blocks: dict[str, sp.csr_matrix] = {}
@@ -70,8 +91,12 @@ class ContentKNN(CosineKNN):
         self._blocks["description"], self._features["description"] = self._tfidf(
             content["overview"].fillna("").tolist(), stop_words="english", sublinear_tf=True
         )
+        self._blocks["movielens"], self._features["movielens"] = self._id_tfidf(
+            content["movielens_likers"] if "movielens_likers" in content else pd.Series([None] * len(content))
+        )
 
         X = sp.hstack([np.sqrt(self.weights[b]) * self._blocks[b] for b in self.DEFAULT_WEIGHTS], format="csr")
+        X.eliminate_zeros()     # a 0-weighted block leaves explicit zeros, which must not count as features
         has_features = X.getnnz(axis=1) > 0
         self._blocks = {b: m[has_features] for b, m in self._blocks.items()}
         self._genre_lists = content.loc[has_features, "genres"].map(list).tolist()
@@ -85,6 +110,29 @@ class ContentKNN(CosineKNN):
             return sp.csr_matrix(vec.fit_transform(docs), dtype=np.float32), vec.get_feature_names_out()
         except ValueError:      # nothing appears in 2+ titles (tiny or empty corpus)
             return sp.csr_matrix((len(docs), 0), dtype=np.float32), np.array([], dtype=object)
+
+    @staticmethod
+    def _id_tfidf(id_arrays: pd.Series) -> tuple[sp.csr_matrix, np.ndarray]:
+        """
+        TF-IDF over integer ID arrays (e.g. MovieLens user IDs), built as a sparse matrix directly - a TfidfVectorizer
+        over millions of string tokens is much slower. Same treatment as `_tfidf()`: binary, IDF-weighted (a user who
+        likes everything counts for less), IDs in only one title dropped, rows L2-normalised.
+        """
+        arrays = [np.asarray(a, dtype=np.int64) if a is not None and not (isinstance(a, float)) else np.array([], dtype=np.int64)
+                  for a in id_arrays]
+        lengths = np.array([len(a) for a in arrays])
+        if lengths.sum() == 0:
+            return sp.csr_matrix((len(arrays), 0), dtype=np.float32), np.array([], dtype=object)
+        ids, cols = np.unique(np.concatenate(arrays), return_inverse=True)
+        rows = np.repeat(np.arange(len(arrays)), lengths)
+        m = sp.csr_matrix((np.ones(len(cols), dtype=np.float32), (rows, cols)), shape=(len(arrays), len(ids)))
+        m.data[:] = 1.0     # binary, even if an ID was listed twice
+        df = np.asarray((m > 0).sum(axis=0)).ravel()
+        keep = df >= 2
+        m, df, ids = m[:, keep], df[keep], ids[keep]
+        idf = np.log((1 + len(arrays)) / (1 + df)) + 1      # sklearn's smoothed IDF
+        m = normalize(m @ sp.diags(idf.astype(np.float32)), norm="l2")
+        return sp.csr_matrix(m, dtype=np.float32), ids.astype(str)
 
     def genres_of(self, t_const: str) -> list[str]:
         """Genres of a title in the model"""

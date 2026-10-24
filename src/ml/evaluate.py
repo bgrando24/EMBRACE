@@ -22,6 +22,7 @@ recommendation", not the same thing.
 Usage (from project root): PYTHONPATH=src python -m ml.evaluate [--grid] [--temporal]
 """
 import argparse
+from pathlib import Path
 import itertools
 from typing import Callable, Iterable, Optional
 
@@ -48,11 +49,17 @@ def profile_ranker(model: CosineKNN, boost: Optional[Callable[[Optional[pd.Times
     `boost(when)` (optional) returns t_const -> amount added to the similarity, e.g. `Freshness.boost`.
     """
     def rank(t_consts, weights, exclude, candidates, when=None):
-        profile = model.profile_vector(t_consts, weights)
-        recs = model.recommend_for_profile(
-            profile, n=len(candidates), allowed=candidates, exclude=exclude, boost=boost(when) if boost else None
-        )
-        return recs["t_const"].tolist()
+        try:
+            profile = model.profile_vector(t_consts, weights)
+        except ValueError:      # none of the profile titles are in the model
+            ranked = []
+        else:
+            ranked = model.recommend_for_profile(
+                profile, n=len(candidates), allowed=candidates, exclude=exclude, boost=boost(when) if boost else None
+            )["t_const"].tolist()
+        # candidates the model can't score (e.g. series in a MovieLens-only model) go last
+        seen = set(ranked)
+        return ranked + [t for t in candidates if t not in seen and t not in exclude]
     return rank
 
 
@@ -98,7 +105,10 @@ def leave_one_out(
     for (user_id, user_name), u in h.groupby(["user_id", "user_name"], dropna=False):
         profile = u[u["imdb_id"].isin(in_scope) & (u["interest"] >= MIN_INTEREST)]
         watched = set(u["imdb_id"])
-        for _, held in profile[(profile["interest"] >= min_heldout_interest) & profile["imdb_id"].isin(candidates)].iterrows():
+        # only watch-history titles are held out, so extra profile sources (e.g. Emby played flags) can be compared
+        # on the same held-out set
+        holdable = profile["source"].isna() if "source" in profile else pd.Series(True, index=profile.index)
+        for _, held in profile[holdable & (profile["interest"] >= min_heldout_interest) & profile["imdb_id"].isin(candidates)].iterrows():
             rest = profile[profile["imdb_id"] != held["imdb_id"]]
             if rest.empty:
                 continue
@@ -189,8 +199,11 @@ def main():
 
     pp = PreProcess(args.db)
     imdb = pp.imdb_get_encoded_genres()
-    content = pp.get_title_content(imdb)
+    movielens = pp.get_movielens_likers() if Path(pp.MOVIELENS_DIR).exists() or Path("data/cache/movielens_likers.parquet").exists() else None
+    content = pp.get_title_content(imdb, movielens)
     user_titles, _ = pp.get_user_title_stats()
+    # Emby's played flags fill in profiles (never held out - see leave_one_out)
+    user_titles = pd.concat([user_titles, pp.get_played_titles(user_titles)], ignore_index=True)
     genre_knn = GenreKNN(imdb)
     content_knn = ContentKNN(content)
 
@@ -242,8 +255,8 @@ def main():
             "genre": profile_ranker(genre_knn),
             "content": profile_ranker(content_knn),
         }
-        for weight in (0.02, 0.05, 0.1, 0.2):
-            for half_life in (7, 30, 90):
+        for weight in (0.1, Freshness.DEFAULT_WEIGHT, 1.0):
+            for half_life in (14, Freshness.DEFAULT_HALF_LIFE_DAYS, 60):
                 temporal[f"content + fresh {weight} / {half_life}d"] = profile_ranker(
                     content_knn, lambda when, w=weight, hl=half_life: freshness.boost(when, w, hl)
                 )

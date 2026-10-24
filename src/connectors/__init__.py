@@ -6,5 +6,6 @@ from .mysql_connector import MySQLConnector
 from .emby_connector import EmbyConnector
 from .sqlite_connector import SQLiteConnector
 from .tmdb_connector import TMDBConnector
+from .jellyseerr_connector import JellyseerrConnector
 
-__all__ = ["MySQLConnector", "EmbyConnector", "SQLiteConnector", "TMDBConnector"]
+__all__ = ["MySQLConnector", "EmbyConnector", "SQLiteConnector", "TMDBConnector", "JellyseerrConnector"]

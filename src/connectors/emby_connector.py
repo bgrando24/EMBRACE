@@ -118,6 +118,51 @@ class EmbyConnector:
         return users
 
 
+    # Emby /Items filters, each queried separately (several in one request must ALL match)
+    USER_STATE_FILTERS = ("IsPlayed", "IsFavorite", "IsResumable")
+
+    def get_user_item_states(self, user_id: str, page_size: int = 1000) -> list[dict]:
+        """
+        Fetch a user's per-item state as Emby keeps it: played flag + play count, favourite, resume position.
+
+        Unlike Playback Reporting (~90 days), this covers everything the user ever marked or finished on the current
+        server - including items marked played by hand, or synced from elsewhere (those have a play count of 0).
+
+        Returns:
+            list of dict: item_id, item_type, played, play_count, last_played (str | None), is_favorite,
+            position_ticks - for every movie/series/episode that is played, a favourite, or partly watched
+        """
+        states: dict[str, dict] = {}
+        for f in self.USER_STATE_FILTERS:
+            start = 0
+            while True:
+                response = requests.get(
+                    f"{self.__BASE_DOMAIN}/Users/{user_id}/Items",
+                    params={
+                        "Recursive": "true", "IncludeItemTypes": "Movie,Series,Episode", "Filters": f,
+                        "Fields": "UserData", "StartIndex": start, "Limit": page_size, "api_key": self.__EMBY_API_KEY,
+                    },
+                    timeout=60,
+                )
+                response.raise_for_status()
+                page = response.json()
+                for item in page.get("Items", []):
+                    ud = item.get("UserData") or {}
+                    states[item["Id"]] = {
+                        "item_id": item["Id"],
+                        "item_type": item.get("Type"),
+                        "played": bool(ud.get("Played")),
+                        "play_count": int(ud.get("PlayCount") or 0),
+                        "last_played": ud.get("LastPlayedDate"),
+                        "is_favorite": bool(ud.get("IsFavorite")),
+                        "position_ticks": int(ud.get("PlaybackPositionTicks") or 0),
+                    }
+                start += len(page.get("Items", []))
+                if not page.get("Items") or start >= page.get("TotalRecordCount", 0):
+                    break
+        return list(states.values())
+
+
     def get_user_watch_hist(self, user_id: str, num_days: int | None = None, is_aggregated=False,) -> T_EmbyUserWatchHistResponse:
         """
         Fetch the watch history for a user

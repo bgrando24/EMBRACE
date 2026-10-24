@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 import re
 import sys
@@ -120,7 +121,7 @@ class PreProcess:
         return set(prov.loc[(prov["provider"] == "imdb") & prov["item_id"].isin(current), "provider_item_id"])
 
 
-    def get_title_content(self, imdb_titles: pd.DataFrame | None = None) -> pd.DataFrame:
+    def get_title_content(self, imdb_titles: pd.DataFrame | None = None, movielens: pd.Series | None = None) -> pd.DataFrame:
         """
         One row per IMDB title with fetched TMDB details (see `SQLiteConnector.ingest_tmdb_title_details`), for
         `ContentKNN`.
@@ -129,10 +130,11 @@ class PreProcess:
             imdb_titles (DataFrame, optional): output of `imdb_get_encoded_genres()`. Supplies IMDB names, types, years,
                 ratings, vote counts (the tie-break) and genres; without it, or for titles it doesn't have, TMDB's are
                 used and num_votes is missing.
+            movielens (Series, optional): output of `get_movielens_likers()`, added as `movielens_likers`
 
         Returns:
             DataFrame: t_const, primary_name, type, start_year, avg_rating, num_votes, genres, keywords, collection,
-                       original_language, people, overview, media_type, tmdb_id
+                       original_language, people, overview, media_type, tmdb_id, recommendations
         """
         d = self.sqlite.get_tmdb_title_details()
         if d.empty:
@@ -163,11 +165,129 @@ class PreProcess:
 
         out = out.reset_index()
         d = d.set_index("t_const").loc[out["t_const"]].reset_index()
-        for col in ["keywords", "collection", "original_language", "people", "overview", "media_type", "tmdb_id"]:
+        for col in ["keywords", "collection", "original_language", "people", "overview", "media_type", "tmdb_id", "recommendations"]:
             out[col] = d[col].to_numpy()
+        if movielens is not None:
+            out["movielens_likers"] = out["t_const"].map(movielens)
         out["num_votes"] = pd.to_numeric(out["num_votes"]).astype("Int64")
         out["avg_rating"] = pd.to_numeric(out["avg_rating"]).astype("Float64")
         return out
+
+
+    def get_played_titles(self, user_titles: pd.DataFrame) -> pd.DataFrame:
+        """
+        Titles Emby has marked played for a user (`user_item_states`) that aren't in their watch history - watched
+        before Playback Reporting's window, elsewhere, or marked by hand. Same columns as `get_user_title_stats()[0]`,
+        so the two can be concatenated, with `source` = "emby_played" (history rows have no `source`).
+
+        Watch time is estimated from the played items' runtimes (a played movie = watched once, a series = its played
+        episodes). There are no dates: Emby's play counts and last-played dates were lost in the server rebuild.
+        """
+        states = self.sqlite.get_user_item_states()
+        if states.empty:
+            return user_titles.iloc[0:0].assign(source=pd.Series(dtype=object))
+        states = states[states["played"] == 1].copy()
+        aliases = self.sqlite.get_user_aliases().set_index("alias_user_id")["user_id"]
+        states["user_id"] = states["user_id"].map(aliases).fillna(states["user_id"])
+
+        mapping = self.map_emby_items_to_imdb(use_imdb_episodes=False).set_index("item_id")
+        lib = self.sqlite.get_library_items().set_index("item_id")
+        states = states.join(mapping[["imdb_id", "unit_type", "unit_name"]], on="item_id")
+        # a played Series row only means "all episodes played", which the episode rows already say
+        states = states[states["imdb_id"].notna() & (states["item_type"] != "Series")]
+        states["seconds"] = states["item_id"].map(lib["runtime_seconds"]).fillna(0)
+
+        seen = set(zip(user_titles["user_id"], user_titles["imdb_id"]))
+        states = states[[(u, t) not in seen for u, t in zip(states["user_id"], states["imdb_id"])]]
+        users = self.sqlite.get_watch_hist_users().set_index("user_id")["user_name"]
+        played = (
+            states.groupby(["user_id", "imdb_id", "unit_type"], as_index=False)
+            .agg(unit_name=("unit_name", "first"), items_watched=("item_id", "nunique"),
+                 total_seconds_watched=("seconds", "sum"))
+        )
+        # Emby's current name for users with no watch history (e.g. only played flags)
+        emby_names = states.drop_duplicates("user_id").set_index("user_id")["user_name"]
+        played["user_name"] = played["user_id"].map(users).fillna(played["user_id"].map(emby_names))
+        movie_runtime = states[states["item_type"] == "Movie"].groupby(["user_id", "imdb_id"])["seconds"].max()
+        played["runtime_seconds"] = [movie_runtime.get((u, t)) for u, t in zip(played["user_id"], played["imdb_id"])]
+        played["source"] = "emby_played"
+        return played
+
+
+    MOVIELENS_DIR = "data/movielens/ml-32m"
+
+    @staticmethod
+    def get_movielens_likers(
+        ml_dir: str = MOVIELENS_DIR,
+        min_rating: float = 4.0,
+        cache_path: str = "data/cache/movielens_likers.parquet",
+        refresh: bool = False,
+    ) -> pd.Series:
+        """
+        For every MovieLens movie, the MovieLens users who liked it (rated >= min_rating), keyed by IMDB ID - the
+        input of ContentKNN's collaborative `movielens` block. Cached after the first run (reading the 32M ratings
+        takes ~30 s).
+
+        MovieLens 32M (GroupLens, University of Minnesota; https://grouplens.org/datasets/movielens/): 32M ratings of
+        87k movies by 200k users, up to Oct 2023 - movies only, nothing newer. Free for non-commercial use; see
+        docs/modules/ml.md for setup and licence.
+
+        Returns:
+            Series: t_const -> int32 array of MovieLens user IDs
+        """
+        cache = Path(cache_path)
+        if cache.exists() and not refresh:
+            df = pd.read_parquet(cache)
+            return pd.Series(df["users"].to_numpy(), index=df["t_const"])
+
+        links = pd.read_csv(Path(ml_dir) / "links.csv", usecols=["movieId", "imdbId"], dtype={"movieId": "int32", "imdbId": "int64"})
+        links["t_const"] = "tt" + links["imdbId"].astype(str).str.zfill(7)
+        ratings = pd.read_csv(Path(ml_dir) / "ratings.csv", usecols=["userId", "movieId", "rating"],
+                              dtype={"userId": "int32", "movieId": "int32", "rating": "float32"})
+        liked = ratings.loc[ratings["rating"] >= min_rating, ["userId", "movieId"]]
+        liked = liked.sort_values("movieId", kind="stable")
+        movie_ids, starts = np.unique(liked["movieId"].to_numpy(), return_index=True)
+        users = pd.Series(np.split(liked["userId"].to_numpy(), starts[1:]), index=movie_ids)
+        df = links.set_index("movieId").join(users.rename("users"), how="inner")[["t_const", "users"]]
+        df = df.drop_duplicates("t_const").reset_index(drop=True)
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        df.to_parquet(cache, index=False, compression="zstd")
+        return pd.Series(df["users"].to_numpy(), index=df["t_const"])
+
+
+    def get_user_requests(self) -> pd.DataFrame:
+        """
+        Jellyseerr requests linked to watch-history users and IMDB titles.
+
+        Requesters are matched by their linked Emby user ID, else by name (case-insensitive) against Emby user names,
+        then resolved through `user_aliases`. Titles are matched through TMDB details (so only titles that reached the
+        library, or were looked up, resolve).
+
+        Returns:
+            DataFrame: user_id (canonical, NaN if the requester couldn't be matched), requester_name, t_const (NaN if
+            unresolved), media_type, tmdb_id, status, media_status, requested_at (timestamp)
+        """
+        req = self.sqlite.get_jellyseerr_requests()
+        if req.empty:
+            return pd.DataFrame(columns=["user_id", "requester_name", "t_const", "media_type", "tmdb_id", "status",
+                                         "media_status", "requested_at"])
+        users = self.sqlite.get_watch_hist_users()
+        by_name = users.assign(key=users["user_name"].str.casefold()).drop_duplicates("key").set_index("key")["user_id"]
+        known_ids = set(users["user_id"])
+        user_id = req["requester_emby_id"].where(req["requester_emby_id"].isin(known_ids))
+        user_id = user_id.fillna(req["requester_name"].str.casefold().map(by_name))
+        aliases = self.sqlite.get_user_aliases().set_index("alias_user_id")["user_id"]
+        req["user_id"] = user_id.map(aliases).fillna(user_id)
+
+        d = self.sqlite.get_tmdb_title_details()
+        if not d.empty:
+            d["t_const"] = d["emby_imdb_id"].fillna(d["imdb_id"])
+            t_const = d.drop_duplicates(["media_type", "tmdb_id"]).set_index(["media_type", "tmdb_id"])["t_const"]
+            req["t_const"] = [t_const.get((m, t)) for m, t in zip(req["media_type"], req["tmdb_id"])]
+        else:
+            req["t_const"] = None
+        req["requested_at"] = pd.to_datetime(req["requested_at"], utc=True, errors="coerce").dt.tz_localize(None)
+        return req[["user_id", "requester_name", "t_const", "media_type", "tmdb_id", "status", "media_status", "requested_at"]]
 
 
     def get_title_additions(self) -> pd.DataFrame:

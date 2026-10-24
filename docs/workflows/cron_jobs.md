@@ -42,7 +42,7 @@ This script has three modes, you can also use the "--help" flag to see these opt
 
 Running this script will add a cron job to the executing machine which does the following:
 1. Copies the current SQLite database to sqlite\_db/backups, with the current date + time (Australia/Melbourne timezone) and ".backup" appended
-2. Makes a working copy of the database (`<SQLITE_DB_NAME>.building`) and refreshes it: TMDB genres (optional), library metadata, TMDB title details for new or stale titles (optional - keywords, cast/crew and descriptions for recommendations), new watch events, then rebuilds sessions and stats
+2. Makes a working copy of the database (`<SQLITE_DB_NAME>.building`) and refreshes it: TMDB genres (optional), library metadata, TMDB title details for new or stale titles (optional - keywords, cast/crew, descriptions and TMDB recommendations), Emby user item states (optional - played flags), Jellyseerr requests (optional, when configured), new watch events, then rebuilds sessions and stats
 3. Replaces the live database with the working copy **only if every step succeeded** - on failure the working copy is discarded, the live database is untouched, and a failure message is sent to Discord
 
 Watch events are added incrementally rather than rebuilt, because Playback Reporting only keeps ~90 days of history.

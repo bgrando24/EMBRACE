@@ -9,6 +9,8 @@ Two `.env` files are required: one at the repository root for the Python service
 | `BASE_DOMAIN` | Yes | Base URL for your Emby server, including the `/emby` suffix (for example `https://192.168.1.5:8096/emby`). The Emby connector concatenates this with the REST paths it calls. |
 | `EMBY_API_KEY` | Yes | API key created from the Emby dashboard. Required for all playback history and metadata calls. |
 | `TMDB_READ_ACCESS_TOKEN` | Yes for TMDB sync | TMDB “read access token” used by the TMDB connector: genre IDs, and the title details (keywords, cast/crew, descriptions) the refresh fetches for `ContentKNN`. |
+| `JELLYSEERR_URL` | No | Base URL of Jellyseerr, e.g. `https://requests.example.com`. With `JELLYSEERR_API_KEY`, the refresh stores media requests. |
+| `JELLYSEERR_API_KEY` | No | Jellyseerr API key (Jellyseerr: Settings -> General -> API Key). |
 | `ENVIRONMENT` | Optional | Controls connector debug logging. Use `dev`, `staging`, or `prod`; defaults to `dev` when unset. |
 | `SQLITE_DB_NAME` | Optional | Overrides the default SQLite file name (`EMBRACE_SQLITE_DB.db`). The database is stored under `sqlite_db/` and is created automatically if missing. |
 | `SQLITE_KEEP_BACKUPS` | Optional | Number of dated database backups the refresh keeps in `sqlite_db/backups/` (one is made per run). Default `30`. `sqlite_db/archive/` is never pruned. |

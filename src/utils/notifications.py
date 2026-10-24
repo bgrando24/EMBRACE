@@ -34,8 +34,8 @@ class Notifications:
             message = message[:2000]
 
         payload = {"content": message}
-        print(f"Sending webhook to: {self.DISCORD_WEBHOOK_URL}")
-        print(f"Payload: {json.dumps(payload)}")
+        # the webhook URL contains its secret token, so don't echo it into cron logs
+        print(f"Sending Discord webhook, payload: {json.dumps(payload)}")
 
         headers = {
             "Content-Type": "application/json",

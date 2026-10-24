@@ -49,7 +49,7 @@ sqlite.ingest_all_library_items(
 ```
 
 - **Chunking**: `ingest_all_library_items` automatically batches inserts and periodically commits.
-- **Pruning**: After ingestion completes, rows in SQLite that no longer exist in Emby are deleted (including child `item_*` rows).
+- **Removed items**: After ingestion completes, rows that no longer exist in Emby are flagged with `removed_at` rather than deleted, so watch history keeps its metadata. An empty or incomplete Emby fetch aborts instead of flagging.
 - **Provider IDs**: TMDB, IMDB, and other provider IDs are normalised into `item_provider_ids` for easy joins with external datasets.
 
 Run this step whenever your Emby library changes materially (new imports, deletions, metadata edits).
@@ -57,15 +57,13 @@ Run this step whenever your Emby library changes materially (new imports, deleti
 ## 3. Import raw watch history
 
 ```python
-sqlite._INIT_POPULATE_watch_hist_raw_events(
+sqlite.ingest_watch_hist_raw_events(
     emby_watch_hist_func=emby.get_all_watch_hist,
 )
 ```
 
-- The helper drops and recreates `watch_hist_raw_events` before inserting new data.
+- Only events not already stored are inserted - existing history is kept. Playback Reporting only retains ~90 days, so **don't** use `_INIT_POPULATE_watch_hist_raw_events` (which drops the table) on an existing database.
 - Playback events prior to 15 August 2025 are shifted from PDT to Australia/Melbourne time to account for Emby’s historical reporting change.
-
-If you only need incremental updates, consider wrapping `get_all_watch_hist` in a custom function that limits `num_days` before passing it to SQLite.
 
 ## 4. Aggregate sessions
 

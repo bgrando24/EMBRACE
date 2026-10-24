@@ -128,7 +128,13 @@ class EmbyConnector:
         Returns:
             dict: The user's watch history data as a JSON-decoded dictionary
         """
-        return requests.get(f"{self.__BASE_DOMAIN}/user_usage_stats/UserPlaylist?user_id={user_id}&aggregate_data={is_aggregated}&days={num_days}&api_key={self.__EMBY_API_KEY}").json()
+        response = requests.get(
+            f"{self.__BASE_DOMAIN}/user_usage_stats/UserPlaylist",
+            params={"user_id": user_id, "aggregate_data": is_aggregated, "days": num_days, "api_key": self.__EMBY_API_KEY},
+            timeout=60,
+        )
+        response.raise_for_status()
+        return response.json()
     
     
     def get_all_watch_hist(self, num_days: int, is_aggregated=False) -> T_EmbyAllUserWatchHist:
@@ -193,6 +199,7 @@ class EmbyConnector:
         """
         start = 0
         total = None
+        yielded = 0
 
         while True:
             page = self.get_items_page(
@@ -209,10 +216,15 @@ class EmbyConnector:
 
             for it in items:
                 yield it
+            yielded += len(items)
 
             got = len(items)
             if got == 0 or (start + got) >= (total or 0):
                 break
             start += got
+
+        # a short read would otherwise look like items were removed from the library
+        if yielded < (total or 0):
+            raise RuntimeError(f"Emby /Items returned {yielded} of {total} items, library fetch is incomplete")
             
         

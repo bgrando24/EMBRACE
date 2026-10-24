@@ -27,7 +27,13 @@ Stores free-form tag labels (e.g., “Kids”, “4K”) associated with a libra
 
 ### `item_provider_ids`
 
-Normalises the `ProviderIds` payload emitted by Emby. Each row captures a provider namespace (TMDB, IMDB, TVDB, etc.) alongside the provider-specific identifier so you can map items back to external datasets. Records are refreshed on every ingest, and rows belonging to media removed from Emby are pruned automatically.
+Normalises the `ProviderIds` payload emitted by Emby. Each row captures a provider namespace (TMDB, IMDB, TVDB, etc.) alongside the provider-specific identifier so you can map items back to external datasets. Records are replaced on every ingest. Provider names are stored lowercase (Emby mixes `IMDB` and `Imdb`), so join on e.g. `provider = 'imdb'`.
+
+### Removed items
+
+Items that disappear from Emby are **not** deleted: `library_items.removed_at` is set instead (and cleared if the item comes back), so watch history for those titles keeps its runtime, genres and provider IDs. Filter with `removed_at IS NULL` for the current library.
+
+Note: Emby item IDs are not stable across a server rebuild - the server was rebuilt between Sep 2025 and Jul 2026 and every item got a new ID. Use provider IDs (IMDb) to link the same title across ID changes. User IDs changed at the same time.
 
 ## TMDB reference tables
 
@@ -44,7 +50,7 @@ The watch-history pipeline converts raw Emby playback events into progressively 
 
 ### `watch_hist_raw_events`
 
-Snapshot of Emby’s playback reporting API. Each row stores the recorded `date` and `time` (normalised to Australia/Melbourne time for pre-August 2025 entries), the `user_id`, `user_name`, `item_id`, `item_name`, `item_type`, playback `duration`, and optional `remote_address` metadata.
+Append-only record of Emby’s playback reporting API. Playback Reporting only retains a limited window (~90 days as of Oct 2026), so this table is the only copy of older history and must never be rebuilt from scratch. A unique index on `(user_id, item_id, date, time, duration)` makes re-fetching overlapping windows safe (duration is included because the plugin can log a 0s stub and the real play at the same second). Each row stores the recorded `date` and `time` (normalised to Australia/Melbourne time for pre-August 2025 entries), the `user_id`, `user_name`, `item_id`, `item_name`, `item_type`, playback `duration`, and optional `remote_address` metadata.
 
 ### `watch_hist_agg_sessions`
 
@@ -67,7 +73,7 @@ Derived statistics summarising a user’s relationship with a specific item. Gen
 Run the following steps—typically in this order—to refresh watch history:
 
 1. **Library ingest** (`ingest_all_library_items`): Populate `library_items`, `item_genres`, `item_tags`, and `item_provider_ids`. Provide `EmbyConnector.iter_all_items()` and optionally `EmbyConnector.get_item_metadata()` so the connector can fetch series-level genres for episodes.
-2. **Raw event sync** (`_INIT_POPULATE_watch_hist_raw_events`): Downloads the full playback history via `EmbyConnector.get_all_watch_hist()`, normalises timestamps, and bulk-loads the `watch_hist_raw_events` table.
+2. **Raw event sync** (`ingest_watch_hist_raw_events`): Fetches available playback history via `EmbyConnector.get_all_watch_hist()`, normalises timestamps, and inserts only events not already stored. (`_INIT_POPULATE_watch_hist_raw_events` drops the table first - only use it for a brand new database.)
 3. **Session aggregation** (`_INIT_POPULATE_watch_hist_agg_sessions`): Groups raw events into sessions. Tunable parameters include `session_segment_minutes`, completion thresholds, and minimum seconds for the `sampled` outcome.
 4. **User-item statistics** (`_INIT_POPULATE_watch_hist_user_item_stats`): Summarises aggregate engagement for each `(user, item)` pair, calculating adherence scores and outcome counts.
 5. **Runtime-aware completion update** (`update_completion_ratios`): Rewrites `completion_ratio` for sessions when actual runtime data is available in `library_items`.

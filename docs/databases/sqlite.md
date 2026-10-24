@@ -10,7 +10,7 @@ Central catalogue of every Movie and Episode imported from Emby. Each row contai
 
 - **Identity**: `item_id` (primary key), `item_type`, `item_name`.
 - **Series context**: `series_id`, `series_name`, `season_number`, `episode_number` for episodic content.
-- **Runtime and chronology**: `runtime_ticks` (with generated seconds/minutes columns), `premiere_date`, and `date_created`.
+- **Runtime and chronology**: `runtime_ticks` (with generated seconds/minutes columns), `premiere_date`, and `date_created` (when the item was added to Emby - its DateCreated, stored since Oct 2026, so NULL for items removed before then; used by `Freshness`).
 - **Descriptive metadata**: `overview`, `community_rating`, `production_year`.
 - **File attributes**: `file_path`, `container`, `video_codec`, `resolution_width`, `resolution_height`.
 - **Timestamps**: `last_updated` auto-populates whenever the row is refreshed.

@@ -41,7 +41,7 @@ class EmbyConnector:
             "ParentId","ProviderIds","Path","RunTimeTicks","PremiereDate",
             "ProductionYear","SeriesId","SeriesName","SeasonId",
             "IndexNumber","ParentIndexNumber","Overview","CommunityRating",
-            "Container","Width","Height","MediaStreams",
+            "Container","Width","Height","MediaStreams","DateCreated",
             "GenreItems","TagItems",
             # also request simple name lists for fallback when *_Items are absent
             "Genres","Tags"

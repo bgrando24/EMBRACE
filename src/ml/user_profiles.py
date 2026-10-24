@@ -92,6 +92,7 @@ class UserProfiles:
         n: int = 10,
         allowed: Optional[Iterable[str]] = None,
         types: Optional[Iterable[str]] = None,
+        boost: Optional[pd.Series] = None,
     ) -> pd.DataFrame:
         """
         The `n` titles closest to the user's taste profile that they haven't watched (or opened and abandoned).
@@ -99,6 +100,8 @@ class UserProfiles:
         Args:
             user_id (str): canonical Emby user ID (aliases are already resolved in `get_user_title_stats()`)
             n, allowed, types: as for `GenreKNN.recommend()`
+            boost (Series, optional): t_const -> amount added to the similarity before ranking, e.g.
+                `Freshness.boost()` to put new arrivals first (see `CosineKNN.recommend_for_profile()`)
 
         Returns:
             DataFrame: `recommend_for_profile()` columns + `because_you_watched` (the most similar profile title, ties
@@ -111,7 +114,7 @@ class UserProfiles:
         titles = self.profile_titles(user_id)
         profile = self.knn.profile_vector(titles["imdb_id"], titles["interest"])
         recs = self.knn.recommend_for_profile(
-            profile, n=n, allowed=allowed, types=types, exclude=self._history_of(user_id)["imdb_id"]
+            profile, n=n, allowed=allowed, types=types, exclude=self._history_of(user_id)["imdb_id"], boost=boost
         )
         if recs.empty:
             return recs.assign(because_you_watched=pd.Series(dtype=object), shared=pd.Series(dtype=object))

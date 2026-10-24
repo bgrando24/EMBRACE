@@ -143,11 +143,37 @@ profiles.recommend(user_id, n=10, allowed=pp.get_library_imdb_ids())
 
 With `GenreKNN`, many unwatched titles share the most common profile genres (e.g. `Action, Crime, Drama`), so the popularity tie-break picks the list and users with similar profiles get the same recommendations - one reason `ContentKNN` is the default.
 
+## **Class:** Freshness
+
+How recently each title arrived on the server, as of any date. A movie counts from when it was added; a series from when its newest episode (or the series itself) was added, so a show getting new episodes is fresh again. It's built from Emby's DateCreated (`library_items.date_created`) via `PreProcess.get_title_additions()`.
+
+```python
+from ml import Freshness
+
+freshness = Freshness(pp.get_title_additions())
+freshness.at()                     # titles on the server now: first_added, last_added, age_days
+freshness.at("2026-03-01")         # ... as they were on a past date
+profiles.recommend(user_id, n=10, allowed=library, boost=freshness.boost())   # new arrivals first, by taste
+```
+
+`boost(when, weight=0.3, half_life_days=30)` returns `weight * 0.5 ** (age_days / half_life_days)` per title, which `recommend_for_profile()` / `UserProfiles.recommend()` add to the similarity before ranking. They then return `boost` and `score` too.
+- With the defaults, a title added today gets +0.3, more than almost any profile similarity (typically 0.1-0.3).
+- So new arrivals lead, ordered by taste. After 3 months a title's boost is down to +0.04.
+
+The demo prints two lists per user:
+- **"fresh for you"** (with the boost) predicts what people will actually watch next.
+- **"from the back catalogue"** (taste alone) surfaces older titles that Emby's own "Latest" row won't.
+
+Data caveats:
+- Dates are only stored from Oct 2026, so items removed before then have none and never count as available.
+- The server rebuild re-imported ~840 episodes on 2026-07-24/25, so some shows look like they got new episodes then. Movies keep their file dates.
+
 ## Evaluation: `ml.evaluate`
 
 ```sh
 PYTHONPATH=src python -m ml.evaluate            # compare popularity, GenreKNN, ContentKNN and each content block alone
 PYTHONPATH=src python -m ml.evaluate --grid     # also search ContentKNN block weights (--step 0.2, ~1 min)
+PYTHONPATH=src python -m ml.evaluate --temporal # also the time-aware next-watch evaluation + freshness boosts (~1.5 min)
 ```
 
 The evaluation is leave-one-out on real watch history:
@@ -181,6 +207,31 @@ What the results show:
 Caveats:
 - The data is small: 6 people. Differences of a couple of points are noise, and some users have only 1-7 held-out titles.
 - People can only watch what's on the server, so "a hidden title ranked high" is the best available proxy for a good recommendation, not the same thing.
+
+### Time-aware: `next_watch()`
+
+Leave-one-out ignores time: the profile includes titles watched *after* the hidden one, and every title counts as available. That's fine for comparing content features. It can't test anything time-dependent, so `--temporal` replays history as it happened:
+1. For each liked title, take the moment the user first watched it.
+2. Build the profile from only what they had first watched before then.
+3. Rank only titles already on the server at that point, by Emby's dates.
+
+Results, Oct 2026 (133 held out; fewer than above, since first watches and titles without dates can't be held out):
+
+| Model | hit@10 | MRR | AUC |
+| --- | --- | --- | --- |
+| Popularity | 0.030 | 0.021 | 0.453 |
+| `GenreKNN` | 0.045 | 0.018 | 0.505 |
+| `ContentKNN` | 0.045 | 0.024 | 0.589 |
+| Newest first (ignores taste) | 0.376 | 0.172 | 0.760 |
+| **`ContentKNN` + freshness boost (0.3, 30 days)** | **0.368** | **0.182** | **0.820** |
+
+What the results show:
+- **Recency is the strongest single signal** on this server, for movies and series alike: half of the movies people liked were first watched within 29 days of arriving, and a quarter within 5 days.
+- **Taste on top of recency still helps**: AUC goes from 0.76 to 0.82, so taste orders the rest of the catalogue much better than age does. Top-10 hits stay about the same.
+- **Content alone predicts the next watch poorly.** That's expected when most watching is of new arrivals.
+- **Robust settings:** results plateau for boost weights 0.2-1.0 and half-lives of 14-60 days. The defaults are mid-plateau.
+
+Caveat: profile weights use each earlier title's total interest, including watching after the moment being replayed. It's a small leak, because only per-title totals are kept.
 
 Re-run as history grows, and use it to measure any new feature before adopting it.
 

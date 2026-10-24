@@ -1,6 +1,6 @@
 import sys
 import pandas as pd
-from ml import PreProcess, GenreKNN, ContentKNN, UserProfiles
+from ml import PreProcess, GenreKNN, ContentKNN, Freshness, UserProfiles
 
 # usage (from project root): PYTHONPATH=src python src/ml/main.py [IMDB ID ...]
 # e.g. PYTHONPATH=src python src/ml/main.py tt3890160     (Baby Driver)
@@ -34,12 +34,23 @@ for seed in seeds:
     print(knn.recommend(seed, n=10, allowed=library).drop(columns="type").to_string(index=False))
 
 # ------------- watch history-based recommendations -> "based on everything you've watched, try these."
+# Two lists: what people actually watch next is mostly what just arrived (see docs/modules/ml.md#evaluation), so
+# "fresh for you" ranks new arrivals by taste; "back catalogue" is taste alone, which surfaces older titles that
+# Emby's own "Latest" row won't.
 user_titles, _ = pp.get_user_title_stats()
 profiles = UserProfiles(knn, user_titles)
+freshness = Freshness(pp.get_title_additions())
+fresh = freshness.boost() if len(freshness.at()) else None    # no dates until the refresh stores DateCreated
 print("\n=== Users")
 print(profiles.users().drop(columns="user_id").round(1).to_string(index=False))
 for user_id, user_name in profiles.users()[["user_id", "user_name"]].itertuples(index=False):
     shares = profiles.genre_shares(user_id).head(5)
     print(f"\n=== {user_name} - " + ", ".join(f"{g} {s:.0%}" for g, s in shares.items()))
-    recs = profiles.recommend(user_id, n=10, allowed=library)
-    print(recs.drop(columns=["type", "genres", "avg_rating"]).to_string(index=False))
+    cols = ["primary_name", "start_year", "similarity", "because_you_watched", "shared"]
+    if fresh is not None:
+        recs = profiles.recommend(user_id, n=5, allowed=library, boost=fresh)
+        recs["added_days_ago"] = recs["t_const"].map(freshness.at()["age_days"]).round(0)
+        print("-- fresh for you:")
+        print(recs[cols[:3] + ["added_days_ago"] + cols[3:]].to_string(index=False))
+    print("-- from the back catalogue:" if fresh is not None else "-- recommendations:")
+    print(profiles.recommend(user_id, n=10, allowed=library)[cols].to_string(index=False))

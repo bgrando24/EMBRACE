@@ -247,7 +247,8 @@ class PreProcess:
         Returns:
             (user_titles, unmatched):
                 user_titles - one row per (user_id, imdb_id) with summed sessions/time/outcomes, mean + best completion,
-                              number of distinct Emby items watched (episodes for a series), first/last watched
+                              number of distinct Emby items watched (episodes for a series), first/last watched, and
+                              `runtime_seconds` for movies (NaN for series, or when Emby doesn't know the runtime)
                 unmatched   - the user/item stats rows that couldn't be linked to an IMDB title, with the reason
                               ('not_in_library' when the item was deleted before removed items were kept)
         """
@@ -259,6 +260,10 @@ class PreProcess:
         stats["user_id"] = stats["user_id"].map(aliases).fillna(stats["user_id"])
         df = stats.merge(mapping, on="item_id", how="left").merge(users, on="user_id", how="left")
         df["match_method"] = df["match_method"].fillna("not_in_library")
+        # per-session completion understates a movie watched over several sittings, so keep the runtime to compare
+        # total time watched against
+        runtimes = self.sqlite.get_library_items().set_index("item_id")["runtime_seconds"]
+        df["runtime_seconds"] = df["item_id"].map(runtimes).where(df["item_type"] == "Movie")
         
         matched = df[df["imdb_id"].notna()]
         unmatched = df.loc[df["imdb_id"].isna(), ["user_id", "user_name", "item_id", "item_type", "match_method", "total_seconds_watched"]]
@@ -279,6 +284,7 @@ class PreProcess:
                 best_completion_ratio=("best_completion_ratio", "max"),
                 first_watched_timestamp=("first_watched_timestamp", "min"),
                 last_watched_timestamp=("last_watched_timestamp", "max"),
+                runtime_seconds=("runtime_seconds", "max"),
             )
         )
         return user_titles, unmatched

@@ -112,6 +112,9 @@ class TestEmbyImdbMapping(unittest.TestCase):
         # same movie under old and new Emby IDs -> one row, both sessions
         self.assertEqual(titles.loc["tt100", "total_sessions"], 2)
         self.assertEqual(set(unmatched["item_id"]), {"gone-ep", "orphan-movie", "channel"})
+        # runtime only for movies, so total time watched can be compared against it
+        self.assertEqual(titles.loc["tt100", "runtime_seconds"], 1500)
+        self.assertTrue(pd.isna(titles.loc["tt200", "runtime_seconds"]))
 
     def test_user_aliases_combine_history(self):
         # same person under an old user ID (e.g. before the Emby rebuild), with an old name

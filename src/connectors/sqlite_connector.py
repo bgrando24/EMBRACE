@@ -1295,6 +1295,6 @@ class SQLiteConnector:
             print("[SQLiteConnector] ERROR: DB not connected", file=sys.stderr)
             exit(1)
         return pd.read_sql_query(
-            "SELECT item_id, item_name, item_type, series_id, series_name, production_year, removed_at FROM library_items",
+            "SELECT item_id, item_name, item_type, series_id, series_name, production_year, runtime_seconds, removed_at FROM library_items",
             self._connection,
         )

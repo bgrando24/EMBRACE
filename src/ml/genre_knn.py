@@ -10,6 +10,7 @@ class GenreKNN:
     Item-to-item recommender over multi-hot IMDB genre vectors, using cosine similarity.
 
     "Because you watched X": takes one title and returns the titles whose genre sets are most similar.
+    `recommend_for_profile()` does the same for a blend of titles (a user's history, see `UserGenreProfiles`).
 
     ---
     Why not sklearn's NearestNeighbors?
@@ -84,26 +85,9 @@ class GenreKNN:
         seed = int(self._row_of[t_const])
 
         similarity = self._X @ self._X[seed]
-        # round so float noise doesn't break exact ties (equal genre sets must compare equal)
-        similarity = np.round(similarity, 6)
-
-        mask = np.ones(len(self.titles), dtype=bool)
+        mask = self._filter_mask(allowed, types)
         mask[seed] = False
-        if allowed is not None:
-            mask &= np.isin(self._ids, np.fromiter(allowed, dtype=object).astype(str))
-        if types is not None:
-            mask &= np.isin(self._types, np.array(list(types), dtype=str))
-        candidates = np.flatnonzero(mask)
-        if len(candidates) == 0:
-            return self._empty_result()
-
-        # only fully sort titles that can make the top n: everything at or above the n-th best similarity (incl. ties)
-        if len(candidates) > n:
-            nth_best = np.partition(similarity[candidates], -n)[-n]
-            candidates = candidates[similarity[candidates] >= nth_best]
-        # np.lexsort sorts by the LAST key first: similarity desc, then votes desc, then t_const asc
-        order = np.lexsort((self._ids[candidates], -self._votes[candidates], -similarity[candidates]))
-        top = candidates[order[:n]]
+        top, similarity = self._rank(similarity, mask, n)
 
         out = self.titles.loc[top, self.OUTPUT_COLS].copy()
         out["similarity"] = similarity[top]
@@ -114,10 +98,83 @@ class GenreKNN:
         ]
         return out.reset_index(drop=True)
 
+    def profile_vector(self, t_consts: Iterable[str], weights: Iterable[float]) -> np.ndarray:
+        """
+        A taste profile in the same space as the titles: the weighted sum of the titles' (normalised) genre vectors,
+        L2-normalised so `recommend_for_profile()` scores titles by cosine similarity to it.
+
+        Each title contributes the same total amount however many genres it has, so a 3-genre title doesn't count
+        more than a 1-genre one. Titles not in the model are skipped.
+
+        Raises:
+            ValueError: if no title with a positive weight is in the model
+        """
+        weights = pd.Series(list(weights), index=list(t_consts), dtype=float)
+        weights = weights[weights.index.isin(self._row_of.index) & (weights > 0)]
+        if weights.empty:
+            raise ValueError("None of the weighted titles are in the model")
+        vector = weights.to_numpy(dtype=np.float32) @ self._X[self._row_of[weights.index].to_numpy()]
+        return vector / np.linalg.norm(vector)
+
+    def recommend_for_profile(
+        self,
+        profile: np.ndarray,
+        n: int = 10,
+        allowed: Optional[Iterable[str]] = None,
+        types: Optional[Iterable[str]] = None,
+        exclude: Optional[Iterable[str]] = None,
+    ) -> pd.DataFrame:
+        """
+        Returns the `n` titles closest to a taste profile (see `profile_vector()`), ranked like `recommend()`.
+
+        Args:
+            profile (ndarray): output of `profile_vector()`
+            n, allowed, types: as for `recommend()`
+            exclude (Iterable[str], optional): never recommend these IMDB IDs, e.g. titles the user already watched
+
+        Returns:
+            DataFrame: OUTPUT_COLS + `similarity` (cosine, 0-1) + `genres` (the title's genres)
+        """
+        similarity = self._X @ profile.astype(np.float32)
+        mask = self._filter_mask(allowed, types)
+        if exclude is not None:
+            mask &= ~np.isin(self._ids, np.fromiter(exclude, dtype=object).astype(str))
+        top, similarity = self._rank(similarity, mask, n)
+
+        out = self.titles.loc[top, self.OUTPUT_COLS].copy()
+        out["similarity"] = similarity[top]
+        out["genres"] = [self.genres_of(self._ids[j]) for j in top]
+        return out.reset_index(drop=True)
+
+    def _filter_mask(self, allowed: Optional[Iterable[str]], types: Optional[Iterable[str]]) -> np.ndarray:
+        """Boolean mask over the model's rows of the titles that may be recommended"""
+        mask = np.ones(len(self.titles), dtype=bool)
+        if allowed is not None:
+            mask &= np.isin(self._ids, np.fromiter(allowed, dtype=object).astype(str))
+        if types is not None:
+            mask &= np.isin(self._types, np.array(list(types), dtype=str))
+        return mask
+
+    def _rank(self, similarity: np.ndarray, mask: np.ndarray, n: int) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Row indices of the top `n` masked titles, ordered by similarity desc, then num_votes desc, then t_const asc.
+        Also returns the rounded similarity array the ranking used.
+        """
+        # round so float noise doesn't break exact ties (equal genre sets must compare equal)
+        similarity = np.round(similarity, 6)
+        candidates = np.flatnonzero(mask)
+        if len(candidates) == 0:
+            return candidates, similarity
+
+        # only fully sort titles that can make the top n: everything at or above the n-th best similarity (incl. ties)
+        if len(candidates) > n:
+            nth_best = np.partition(similarity[candidates], -n)[-n]
+            candidates = candidates[similarity[candidates] >= nth_best]
+        # np.lexsort sorts by the LAST key first: similarity desc, then votes desc, then t_const asc
+        order = np.lexsort((self._ids[candidates], -self._votes[candidates], -similarity[candidates]))
+        return candidates[order[:n]], similarity
+
     def genres_of(self, t_const: str) -> list[str]:
         """Genres of a title in the model"""
         row = self._genres[int(self._row_of[t_const])]
         return [c.removeprefix("genre_") for c, has in zip(self.genre_cols, row) if has]
-
-    def _empty_result(self) -> pd.DataFrame:
-        return pd.DataFrame(columns=self.OUTPUT_COLS + ["similarity", "shared_genres"])

@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 from connectors import MySQLConnector, SQLiteConnector
 from mysql.connector import Error as MySQLError
+from sklearn.preprocessing import MultiLabelBinarizer
 from dotenv import load_dotenv
 import os
 
@@ -32,70 +33,91 @@ class PreProcess:
                 raise
         return self._mysql
     
-    def imdb_get_encoded_genres(self, cache_path: str = "data/cache/imdb_genres_ohe.parquet", refresh: bool = False) -> pd.DataFrame:
-        """Fetch IMDB titles and their genres, return one-hot encoded pandas DataFrame
-           Uses on-disk cache (.parquet or .pkl) unless refresh=True."""
+    # IMDB title types we recommend: movies and shows, not episodes, shorts, video games etc.
+    DEFAULT_TITLE_TYPES = ("movie", "tvSeries", "tvMiniSeries")
+    
+    def imdb_get_encoded_genres(
+        self,
+        title_types: tuple[str, ...] = DEFAULT_TITLE_TYPES,
+        include_adult: bool = False,
+        cache_path: str | None = None,
+        refresh: bool = False,
+    ) -> pd.DataFrame:
+        """
+        Fetch IMDB titles of the given types with their genres and ratings, return a multi-hot encoded DataFrame
+        (see `encode_title_genres`). Uses an on-disk Parquet cache unless refresh=True.
         
-        cache = Path(cache_path)
-
-        # load from cache if present (accept .parquet or .pkl)
-        if not refresh:
-            candidates = []
-            if cache.exists():
-                candidates.append(cache)
-            alt = cache.with_suffix(".pkl") if cache.suffix != ".pkl" else cache.with_suffix(".parquet")
-            if alt.exists():
-                candidates.append(alt)
-            if candidates:
-                chosen = candidates[0]
-                print(f"Loading cached encoded genres from {chosen}")
-                return pd.read_pickle(chosen) if chosen.suffix == ".pkl" else pd.read_parquet(chosen)
+        Args:
+            title_types (tuple[str], optional): IMDB title types to include - DEFAULT: movie, tvSeries, tvMiniSeries
+            include_adult (bool, optional): Include titles IMDB flags as adult - DEFAULT: False
+            cache_path (str, optional): DEFAULT: data/cache/imdb_genres_<title types>[_adult].parquet
+            refresh (bool, optional): Ignore the cache and re-query MySQL
+        """
+        suffix = "_adult" if include_adult else ""
+        cache = Path(cache_path or f"data/cache/imdb_genres_{'-'.join(sorted(title_types))}{suffix}.parquet")
+        if cache.exists() and not refresh:
+            print(f"Loading cached encoded genres from {cache}")
+            return pd.read_parquet(cache)
 
         try:
             print("\nAttempting to fetch title names and genres...\n")
-            self.mysql.curs.execute("""
-                SELECT t.t_const, t.primary_name, g.genre
+            placeholders = ",".join(["%s"] * len(title_types))
+            self.mysql.curs.execute(f"""
+                SELECT t.t_const, t.primary_name, t.type, t.start_year, r.avg_rating, r.num_votes, g.genre
                 FROM titles t
                 JOIN genres g ON t.t_const = g.t_const
-            """)
-            rows = self.mysql.curs.fetchall()
-            cols = [d[0] for d in self.mysql.curs.description] if self.mysql.curs.description else ["t_const","primary_name","genre"]
-            data = pd.DataFrame(rows, columns=cols)
+                LEFT JOIN ratings r ON t.t_const = r.t_const
+                WHERE t.type IN ({placeholders})
+                  {"" if include_adult else "AND (t.is_adult = 0 OR t.is_adult IS NULL)"}
+            """, list(title_types))
+            cols = [d[0] for d in self.mysql.curs.description]
+            data = pd.DataFrame(self.mysql.curs.fetchall(), columns=cols)
             print("\nTitle data fetched!\n")
         except (Exception, MySQLError) as e:
             print(f"ERROR [imdb_get_encoded_genres]: Failed to fetch MySQL data: {e}", file=sys.stderr)
-            sys.exit(1)
+            raise
         
         if data.empty:
             raise Exception("ERROR [imdb_get_encoded_genres]: No data returned when fetching data")
         
-        # one-hot encode only the 'genre' column
-        dummies = pd.get_dummies(data["genre"], prefix="genre", dtype="uint8")
-        encoded = pd.concat([data.drop(columns=["genre"]), dummies], axis=1)
-        encoded = encoded.groupby(["t_const", "primary_name"], as_index=False).sum()
-
-        # use sparse types in-memory to save RAM
-        for c in encoded.columns:
-            if c.startswith("genre_"):
-                encoded[c] = encoded[c].astype(pd.SparseDtype("uint8", 0))
-
-        # save to cache - prefer Parquet, if sparse not supported or no engine, fall back to pickle
+        encoded = self.encode_title_genres(data)
         cache.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            # densify only genre columns for Parquet
-            dense = encoded.copy()
-            genre_cols = [c for c in dense.columns if c.startswith("genre_")]
-            for c in genre_cols:
-                if isinstance(dense[c].dtype, pd.SparseDtype):
-                    dense[c] = dense[c].sparse.to_dense().astype("uint8")
-            dense.to_parquet(cache.with_suffix(".parquet"), index=False, compression="zstd")
-            print(f"Saved encoded genres cache to {cache.with_suffix('.parquet')}")
-        except Exception as e:
-            pkl = cache.with_suffix(".pkl")
-            encoded.to_pickle(pkl)
-            print(f"Saved pickle cache to {pkl} (Parquet unavailable or unsupported: {e})")
-
+        encoded.to_parquet(cache, index=False, compression="zstd")
+        print(f"Saved encoded genres cache to {cache}")
         return encoded
+
+
+    @staticmethod
+    def encode_title_genres(data: pd.DataFrame) -> pd.DataFrame:
+        """
+        Turns one row per (title, genre) into one row per title with a multi-hot `genre_<name>` column per genre.
+        
+        Args:
+            data (DataFrame): t_const, primary_name, type, start_year, avg_rating, num_votes, genre
+        
+        Returns:
+            DataFrame: one row per t_const, the non-genre columns, then uint8 genre_* columns in alphabetical order
+        """
+        meta = data.drop(columns="genre").drop_duplicates("t_const").set_index("t_const")
+        genre_lists = data.groupby("t_const")["genre"].agg(lambda g: sorted(set(g)))
+        
+        # MultiLabelBinarizer expects one collection of labels per sample; classes_ (the vocabulary) are sorted
+        mlb = MultiLabelBinarizer()
+        X = mlb.fit_transform(genre_lists)
+        genres = pd.DataFrame(X.astype("uint8"), columns=[f"genre_{g}" for g in mlb.classes_], index=genre_lists.index)
+        
+        encoded = meta.loc[genre_lists.index].join(genres).reset_index()
+        encoded["num_votes"] = encoded["num_votes"].astype("Int64")
+        encoded["avg_rating"] = encoded["avg_rating"].astype("Float64")
+        return encoded
+
+
+    def get_library_imdb_ids(self) -> set[str]:
+        """IMDB IDs of the movies and series currently on the Emby server"""
+        lib = self.sqlite.get_library_items()
+        current = lib.loc[lib["removed_at"].isna() & lib["item_type"].isin(["Movie", "Series"]), "item_id"]
+        prov = self.sqlite.get_item_provider_ids()
+        return set(prov.loc[(prov["provider"] == "imdb") & prov["item_id"].isin(current), "provider_item_id"])
 
 
     def map_emby_items_to_imdb(self, use_imdb_episodes: bool = True) -> pd.DataFrame:

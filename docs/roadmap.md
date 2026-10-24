@@ -4,6 +4,8 @@ A proper 'roadmap' style graph or chart is TBA, however below are planned future
 
 ## Possibilities but not yet critical or core ideas
 
+-   [x] **Recommendations in Emby**: nightly private "Fresh for you" and "From the back catalogue" playlists per user (`scripts/picks/daily_picks.py`)
+
 -   [ ] **Auxiliary intelligent recommendation features**: Think of Netflix's different recommendation sections: _"Because you watched 'X'"_, _"Catch up on unwatched episodes"_, _"Similar titles to your recent binges"_
 
 -   [ ] **Integration with Jellyseerr**: E.g. have an in-chat button to request a new recommendation without having to actually open Jellyseerr

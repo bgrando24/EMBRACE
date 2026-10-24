@@ -11,6 +11,8 @@ Two `.env` files are required: one at the repository root for the Python service
 | `TMDB_READ_ACCESS_TOKEN` | Yes for TMDB sync | TMDB “read access token” used by the TMDB connector: genre IDs, and the title details (keywords, cast/crew, descriptions) the refresh fetches for `ContentKNN`. |
 | `JELLYSEERR_URL` | No | Base URL of Jellyseerr, e.g. `https://requests.example.com`. With `JELLYSEERR_API_KEY`, the refresh stores media requests. |
 | `JELLYSEERR_API_KEY` | No | Jellyseerr API key (Jellyseerr: Settings -> General -> API Key). |
+| `DISCORD_WEBHOOK_URL` | No | Discord webhook for the refresh status and the nightly picks preview. Without it, notifications are skipped. |
+| `EMBRACE_PICKS_EXCLUDE_USERS` | No | Comma-separated Emby user names that get no recommendation playlists, and are left out of the picks preview. |
 | `ENVIRONMENT` | Optional | Controls connector debug logging. Use `dev`, `staging`, or `prod`; defaults to `dev` when unset. |
 | `SQLITE_DB_NAME` | Optional | Overrides the default SQLite file name (`EMBRACE_SQLITE_DB.db`). The database is stored under `sqlite_db/` and is created automatically if missing. |
 | `SQLITE_KEEP_BACKUPS` | Optional | Number of dated database backups the refresh keeps in `sqlite_db/backups/` (one is made per run). Default `30`. `sqlite_db/archive/` is never pruned. |

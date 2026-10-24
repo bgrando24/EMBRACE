@@ -62,7 +62,20 @@ Which titles get fetched:
 - Titles without details go first, and details older than 90 days are refetched.
 - The first run is ~600 requests (~3 min); after that, only new titles.
 
-Read the details with `get_tmdb_title_details()`, or `PreProcess.get_title_content()` for model input.
+Read the details with `get_tmdb_title_details()`, or `PreProcess.get_title_content()` for model input. `recommendations` (JSON list of `"movie:<id>"` / `"tv:<id>"`) is TMDB's "people who liked this also liked" list; rows fetched before it existed are refetched once.
+
+## Emby user item states
+
+`user_item_states`: Emby's own per-user state for every movie, series and episode that is played, a favourite, or partly watched. It's a snapshot that `ingest_user_item_states(Emby.get_all_emby_users, Emby.get_user_item_states)` replaces on each refresh, all-or-nothing.
+- **Columns:** `user_id`, `item_id`, `item_type`, `played`, `play_count`, `last_played`, `is_favorite`, `position_ticks`.
+- **Coverage:** unlike Playback Reporting (~90 days), this covers everything ever marked or finished on the current server.
+- **Caveat (Oct 2026):** every played item has `play_count` 0 and no `last_played`. The flags came through the server rebuild without their counts.
+
+## Jellyseerr requests
+
+`jellyseerr_requests`: one row per request, upserted by `ingest_jellyseerr_requests(JellyseerrConnector().iter_requests)` when `JELLYSEERR_URL` and `JELLYSEERR_API_KEY` are set. Requests deleted in Jellyseerr stay here.
+- **Columns:** `request_id`, `media_type`, `tmdb_id`, `status`, `media_status`, `requested_at`, `updated_at`, `requester_id`, `requester_name`, `requester_emby_id`.
+- **Linking:** `PreProcess.get_user_requests()` links each request to a watch-history user (by Emby user ID, else by name, then through aliases) and to an IMDB title (through TMDB details).
 
 ## Watch history tables
 

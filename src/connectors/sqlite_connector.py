@@ -3,7 +3,7 @@ import sqlite3
 import sys
 from typing import Optional, Final
 import os
-from typing import Callable, Dict
+from typing import Callable, Dict, Iterable
 import zlib
 import json
 from custom_types import T_EmbyAllUserWatchHist, T_TMDBGenres
@@ -1225,8 +1225,13 @@ class SQLiteConnector:
                     collection TEXT,
                     people TEXT,
                     fetched_at TEXT NOT NULL,
+                    recommendations TEXT,
                     PRIMARY KEY (media_type, tmdb_id)
                 )""")
+            # migrate tables created before recommendations were fetched (NULL = refetch, see ingest_tmdb_title_details)
+            cols = {r[1] for r in self._connection.execute("PRAGMA table_info(tmdb_title_details)")}
+            if "recommendations" not in cols:
+                self._connection.execute("ALTER TABLE tmdb_title_details ADD COLUMN recommendations TEXT")
             self._connection.commit()
             return True
         except sqlite3.Error as e:
@@ -1275,7 +1280,7 @@ class SQLiteConnector:
             SELECT t.media_type, t.tmdb_id, d.fetched_at
             FROM targets t
             LEFT JOIN tmdb_title_details d ON d.media_type = t.media_type AND d.tmdb_id = t.tmdb_id
-            WHERE t.tmdb_id > 0 AND (d.fetched_at IS NULL OR d.fetched_at < ?)
+            WHERE t.tmdb_id > 0 AND (d.fetched_at IS NULL OR d.fetched_at < ? OR (d.found = 1 AND d.recommendations IS NULL))
             ORDER BY d.fetched_at IS NOT NULL, d.fetched_at, t.media_type, t.tmdb_id
         """, [*self.TMDB_MEDIA_TYPES, cutoff]).fetchall()
         due = due[:limit] if limit is not None else due
@@ -1292,11 +1297,15 @@ class SQLiteConnector:
                 continue
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             if d is None:
-                row = (media_type, tmdb_id, 0, None, None, None, None, None, None, None, None, now)
+                row = (media_type, tmdb_id, 0, None, None, None, None, None, None, None, None, now, None)
             else:
                 row = (media_type, tmdb_id, 1, d["imdb_id"], d["title"], d["overview"], d["original_language"],
-                       json.dumps(d["genres"]), json.dumps(d["keywords"]), d["collection"], json.dumps(d["people"]), now)
-            self._connection.execute(f"INSERT OR REPLACE INTO tmdb_title_details VALUES ({','.join('?' * 12)})", row)
+                       json.dumps(d["genres"]), json.dumps(d["keywords"]), d["collection"], json.dumps(d["people"]), now,
+                       json.dumps(d.get("recommendations", [])))
+            self._connection.execute(
+                """INSERT OR REPLACE INTO tmdb_title_details(media_type, tmdb_id, found, imdb_id, title, overview,
+                       original_language, genres, keywords, collection, people, fetched_at, recommendations)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""", row)
             fetched += 1
             if i % 50 == 0:
                 self._connection.commit()
@@ -1359,7 +1368,153 @@ class SQLiteConnector:
         """, self._connection)
         for col in ("genres", "keywords", "people"):
             df[col] = df[col].map(json.loads)
+        df["recommendations"] = df["recommendations"].map(lambda r: json.loads(r) if r else [])
         return df
+
+
+    # ====================================================================== Emby user item states ======================================================================
+
+    def _ensure_user_item_states_schema(self) -> bool:
+        """
+        Creates (if doesn't exist) `user_item_states`: Emby's own per-user item state (played, play count, favourite,
+        resume position) - a snapshot replaced on each refresh, not an event log.
+        """
+        try:
+            self._connection.execute("""
+                CREATE TABLE IF NOT EXISTS user_item_states(
+                    user_id TEXT NOT NULL,
+                    item_id TEXT NOT NULL,
+                    item_type TEXT,
+                    played INTEGER NOT NULL,
+                    play_count INTEGER NOT NULL,
+                    last_played TEXT,
+                    is_favorite INTEGER NOT NULL,
+                    position_ticks INTEGER NOT NULL,
+                    fetched_at TEXT NOT NULL,
+                    user_name TEXT,
+                    PRIMARY KEY (user_id, item_id)
+                )""")
+            if "user_name" not in {r[1] for r in self._connection.execute("PRAGMA table_info(user_item_states)")}:
+                self._connection.execute("ALTER TABLE user_item_states ADD COLUMN user_name TEXT")
+            self._connection.commit()
+            return True
+        except sqlite3.Error as e:
+            print(f"[SQLiteConnector] ERROR: Failed to create user_item_states: {e}", file=sys.stderr)
+            return False
+
+    def ingest_user_item_states(
+        self,
+        get_users_func: Callable[[], dict[str, str]],
+        get_states_func: Callable[[str], list[dict]],
+    ) -> int:
+        """
+        Replaces the `user_item_states` snapshot with the current state for every Emby user. All-or-nothing: if any
+        user's fetch fails, the previous snapshot is kept.
+
+        Args:
+            get_users_func: e.g. `EmbyConnector.get_all_emby_users` - () -> {user name: user ID}
+            get_states_func: e.g. `EmbyConnector.get_user_item_states` - user ID -> list of state dicts
+
+        Returns:
+            int: rows stored, or -1 on failure
+        """
+        if self._connection is None or not self._ensure_user_item_states_schema():
+            return -1
+        try:
+            rows = []
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            for user_name, user_id in get_users_func().items():
+                for st in get_states_func(user_id):
+                    rows.append((user_id, st["item_id"], st["item_type"], int(st["played"]), st["play_count"],
+                                 st["last_played"], int(st["is_favorite"]), st["position_ticks"], now, user_name))
+        except Exception as e:
+            print(f"[SQLiteConnector] ERROR: Failed to fetch Emby user item states: {e}", file=sys.stderr)
+            return -1
+        try:
+            with self._connection:
+                self._connection.execute("DELETE FROM user_item_states")
+                self._connection.executemany(
+                    """INSERT INTO user_item_states(user_id, item_id, item_type, played, play_count, last_played,
+                           is_favorite, position_ticks, fetched_at, user_name) VALUES (?,?,?,?,?,?,?,?,?,?)""", rows
+                )
+        except sqlite3.Error as e:
+            print(f"[SQLiteConnector] ERROR: Failed to store Emby user item states: {e}", file=sys.stderr)
+            return -1
+        return len(rows)
+
+    def get_user_item_states(self) -> pd.DataFrame:
+        """Returns the `user_item_states` snapshot as a pandas DataFrame (empty if never fetched)"""
+        if self._connection is None or not self._ensure_user_item_states_schema():
+            return pd.DataFrame()
+        return pd.read_sql_query("SELECT * FROM user_item_states", self._connection)
+
+
+    # ====================================================================== Jellyseerr requests ======================================================================
+
+    def _ensure_jellyseerr_requests_schema(self) -> bool:
+        """
+        Creates (if doesn't exist) `jellyseerr_requests`: who requested which movie/show and when. Upserted on each
+        refresh and never deleted, so requests removed from Jellyseerr stay in the history.
+        """
+        try:
+            self._connection.execute("""
+                CREATE TABLE IF NOT EXISTS jellyseerr_requests(
+                    request_id INTEGER PRIMARY KEY,
+                    media_type TEXT NOT NULL,
+                    tmdb_id INTEGER NOT NULL,
+                    status TEXT,
+                    media_status TEXT,
+                    requested_at TEXT,
+                    updated_at TEXT,
+                    requester_id INTEGER,
+                    requester_name TEXT,
+                    requester_emby_id TEXT,
+                    fetched_at TEXT NOT NULL
+                )""")
+            self._connection.commit()
+            return True
+        except sqlite3.Error as e:
+            print(f"[SQLiteConnector] ERROR: Failed to create jellyseerr_requests: {e}", file=sys.stderr)
+            return False
+
+    def ingest_jellyseerr_requests(self, iter_requests_func: Callable[[], Iterable[dict]]) -> int:
+        """
+        Upserts every Jellyseerr request. All-or-nothing: a failed fetch leaves the table as it was.
+
+        Args:
+            iter_requests_func: e.g. `JellyseerrConnector.iter_requests`
+
+        Returns:
+            int: requests stored, or -1 on failure
+        """
+        if self._connection is None or not self._ensure_jellyseerr_requests_schema():
+            return -1
+        try:
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            rows = [
+                (r["request_id"], r["media_type"], r["tmdb_id"], str(r["status"]), str(r["media_status"]),
+                 r["requested_at"], r["updated_at"], r["requester_id"], r["requester_name"],
+                 str(r["requester_emby_id"]) if r["requester_emby_id"] else None, now)
+                for r in iter_requests_func()
+            ]
+        except Exception as e:
+            print(f"[SQLiteConnector] ERROR: Failed to fetch Jellyseerr requests: {e}", file=sys.stderr)
+            return -1
+        try:
+            with self._connection:
+                self._connection.executemany(
+                    f"INSERT OR REPLACE INTO jellyseerr_requests VALUES ({','.join('?' * 11)})", rows
+                )
+        except sqlite3.Error as e:
+            print(f"[SQLiteConnector] ERROR: Failed to store Jellyseerr requests: {e}", file=sys.stderr)
+            return -1
+        return len(rows)
+
+    def get_jellyseerr_requests(self) -> pd.DataFrame:
+        """Returns `jellyseerr_requests` as a pandas DataFrame (empty if never fetched)"""
+        if self._connection is None or not self._ensure_jellyseerr_requests_schema():
+            return pd.DataFrame()
+        return pd.read_sql_query("SELECT * FROM jellyseerr_requests", self._connection)
 
 
     # ====================================================================== User aliases ======================================================================

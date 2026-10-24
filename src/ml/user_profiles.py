@@ -95,7 +95,8 @@ class UserProfiles:
         boost: Optional[pd.Series] = None,
     ) -> pd.DataFrame:
         """
-        The `n` titles closest to the user's taste profile that they haven't watched (or opened and abandoned).
+        The `n` titles closest to the user's taste profile that they haven't watched (or opened and abandoned, or
+        Emby has marked played).
 
         Args:
             user_id (str): canonical Emby user ID (aliases are already resolved in `get_user_title_stats()`)
@@ -114,7 +115,7 @@ class UserProfiles:
         titles = self.profile_titles(user_id)
         profile = self.knn.profile_vector(titles["imdb_id"], titles["interest"])
         recs = self.knn.recommend_for_profile(
-            profile, n=n, allowed=allowed, types=types, exclude=self._history_of(user_id)["imdb_id"], boost=boost
+            profile, n=n, allowed=allowed, types=types, exclude=self._seen_by(user_id), boost=boost
         )
         if recs.empty:
             return recs.assign(because_you_watched=pd.Series(dtype=object), shared=pd.Series(dtype=object))
@@ -130,6 +131,14 @@ class UserProfiles:
             for i, rec, ok in zip(best, recs["t_const"], has_reason)
         ]
         return recs
+
+    def _seen_by(self, user_id: str) -> list[str]:
+        """Titles never to recommend: everything watched or marked played - but not titles only requested, since
+        "the thing you asked for has arrived" is a fair recommendation"""
+        h = self._history_of(user_id)
+        if "source" in h:
+            h = h[h["source"].ne("jellyseerr_request")]
+        return h["imdb_id"].tolist()
 
     def _history_of(self, user_id: str) -> pd.DataFrame:
         h = self.history[self.history["user_id"] == user_id]

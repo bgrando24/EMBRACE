@@ -77,12 +77,14 @@ class TMDBConnector:
             dict, or None if TMDB has no such title (HTTP 404):
                 tmdb_id, media_type, imdb_id, title, overview, original_language, genres (list[str]),
                 keywords (list[str]), collection (str | None - movie franchise, e.g. "The Accountant Collection"),
-                people (list of {id, name, role}: role is cast/director/writer/creator)
+                people (list of {id, name, role}: role is cast/director/writer/creator),
+                recommendations (list of "movie:<id>" / "tv:<id>": TMDB's "people who liked this also liked" list,
+                from its users' behaviour - first page, up to 20)
 
         Raises:
             requests.HTTPError: any other failed request
         """
-        extra = "keywords,credits" if media_type == "movie" else "keywords,aggregate_credits,external_ids"
+        extra = "keywords,credits,recommendations" if media_type == "movie" else "keywords,aggregate_credits,external_ids,recommendations"
         d = self._get(f"/{media_type}/{tmdb_id}", {"append_to_response": extra, "language": "en-US"}, retries)
         if d is None:
             return None
@@ -121,6 +123,9 @@ class TMDBConnector:
             "keywords": [k["name"] for k in keywords],
             "collection": collection.get("name") if collection else None,
             "people": people,
+            "recommendations": [
+                f"{r.get('media_type') or media_type}:{r['id']}" for r in d.get("recommendations", {}).get("results", [])
+            ],
         }
 
     def find_by_imdb_id(self, imdb_id: str, retries: int = 3) -> Optional[tuple[str, int]]:

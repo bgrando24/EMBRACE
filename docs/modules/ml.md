@@ -73,13 +73,13 @@ knn.recommend("tt4647692", n=10, allowed=pp.get_library_imdb_ids()) # only title
 
 ## **Class:** ContentKNN
 
-Recommender over richer content than genre: TMDB keywords, people and descriptions. It only covers titles with fetched TMDB details: the library's movies and series, including removed ones still in watch history. Scoring is the same cosine similarity, ordering and tie-break as `GenreKNN`.
+Recommender over richer content than genre: TMDB keywords, people and descriptions, plus collaborative signals from MovieLens (and optionally TMDB). It only covers titles with fetched TMDB details: the library's movies and series, including removed ones still in watch history. Scoring is the same cosine similarity, ordering and tie-break as `GenreKNN`.
 
 ```python
 from ml import PreProcess, ContentKNN
 
 pp = PreProcess()
-knn = ContentKNN(pp.get_title_content(pp.imdb_get_encoded_genres()))
+knn = ContentKNN(pp.get_title_content(pp.imdb_get_encoded_genres(), pp.get_movielens_likers()))
 knn.recommend("tt3890160", n=10, allowed=pp.get_library_imdb_ids())   # Baby Driver -> The Town, Wrath of Man, Den of Thieves
 ```
 
@@ -87,23 +87,33 @@ knn.recommend("tt3890160", n=10, allowed=pp.get_library_imdb_ids())   # Baby Dri
 
 | Block | Features | Default weight |
 | --- | --- | --- |
-| `genre` | IMDB genres (TMDB's if IMDB has none) | 0.05 |
-| `keywords` | TMDB keywords, `collection: <franchise>` for movies, `language: <code>` when not English | 0.4 |
-| `people` | Director + writers (movies) or creators (series), and the top 8 billed cast, by TMDB person ID | 0.35 |
-| `description` | Words of the TMDB overview, English stop words removed | 0.2 |
+| `genre` | IMDB genres (TMDB's if IMDB has none) | 0.035 |
+| `keywords` | TMDB keywords, `collection: <franchise>` for movies, `language: <code>` when not English | 0.28 |
+| `people` | Director + writers (movies) or creators (series), and the top 8 billed cast, by TMDB person ID | 0.245 |
+| `description` | Words of the TMDB overview, English stop words removed | 0.14 |
+| `movielens` | The MovieLens users who rated the movie 4+: two movies are similar when the same people liked both | 0.3 |
+| `tmdb_recs` | TMDB's "people who liked this also liked" list, plus the title itself | 0 (off) |
+
+The two collaborative blocks bring in behaviour from far more people than this server has:
+- **`movielens`** is collaborative filtering from 200k MovieLens users. It only covers movies up to Oct 2023: 245 of 454 library movies. For series and newer movies the block is empty, and the other blocks take up its weight.
+- **`tmdb_recs`** is fetched with the TMDB details. It made no measurable difference at 0.1-0.3 in either evaluation, so it's off, but the data is there to re-test.
 
 How the features are scored and combined:
 - **TF-IDF weighting:** each block is TF-IDF weighted and L2-normalised on its own. A shared keyword or actor counts for more the rarer it is, so "workplace comedy" outweighs "based on novel or book".
 - **Single-title tokens dropped:** a token found in only one title can never match anything, so it is left out.
 - **Combining blocks:** the blocks are concatenated with `sqrt(weight)` scaling. Similarity is therefore the weighted sum of the per-block cosines, re-normalised over the blocks a title has.
 
-**Weights** are `ContentKNN.DEFAULT_WEIGHTS`, chosen with `ml.evaluate` (below). Every one of the 10 best grid weightings gave genre 0: once keywords are in, genre adds nothing. A small weight is kept so titles with few keywords stay sensible and explanations can mention genres. Override per instance with `ContentKNN(content, weights={...})`.
+**Weights** are `ContentKNN.DEFAULT_WEIGHTS`, chosen with `ml.evaluate` (below):
+- Every one of the 10 best grid weightings of the content blocks gave genre 0: once keywords are in, genre adds nothing. A small weight is kept so titles with few keywords stay sensible and explanations can mention genres.
+- MovieLens gets 0.3, with the content blocks scaled to the remaining 0.7. MRR rose steadily as its weight went from 0.1 to 0.5, in both evaluations.
+
+Override per instance with `ContentKNN(content, weights={...})`.
 
 **Known limitation - hub titles**: a title with very few keywords can match many profiles through one generic keyword. "Tell Me Lies" has only "based on novel or book" and is recommended to 3-4 of 6 users. Two fixes were tested and didn't improve the metrics, so neither is applied:
 - shrinking blocks with few tokens
 - dropping keywords that appear in more than 5-20% of titles
 
-### `PreProcess.get_title_content(imdb_titles=None)`
+### `PreProcess.get_title_content(imdb_titles=None, movielens=None)`
 
 One row per IMDB title with fetched TMDB details, built from `tmdb_title_details` (see [SQLite](../databases/sqlite.md)).
 
@@ -115,11 +125,14 @@ One row per IMDB title with fetched TMDB details, built from `tmdb_title_details
 
 Per-user recommendations from watch history ("based on everything you've watched"). Each user's taste profile is the interest-weighted sum of the feature vectors of what they watched; recommendations are the unwatched titles closest to it (cosine), ordered and tie-broken like `recommend()`. Works with either model; `src/ml/main.py` uses `ContentKNN` and falls back to `GenreKNN` if no TMDB details have been fetched.
 
+Profiles also use the titles Emby has marked played that aren't in the watch history (`PreProcess.get_played_titles()`): watched before Playback Reporting's ~90-day window, elsewhere, or marked by hand. A played movie counts as watched once, and a series by its played episodes' runtime. Like everything watched, these are never recommended. In leave-one-out they raised hit@10 from 0.096 to 0.112 and AUC from 0.650 to 0.676.
+
 ```python
 from ml import PreProcess, ContentKNN, UserProfiles
 
 pp = PreProcess()
 user_titles, _ = pp.get_user_title_stats()
+user_titles = pd.concat([user_titles, pp.get_played_titles(user_titles)], ignore_index=True)
 profiles = UserProfiles(ContentKNN(pp.get_title_content(pp.imdb_get_encoded_genres())), user_titles)
 profiles.users()                                                  # user_id, user_name, titles watched / in profile, hours
 profiles.genre_shares(user_id)                                    # readable summary of the profile, e.g. Comedy 27%, Drama 18%
@@ -188,19 +201,31 @@ Metrics, where higher is better:
 - **MRR:** mean reciprocal rank
 - **AUC:** the share of other candidates ranked below the hidden title; 0.5 is random order
 
-Results, Oct 2026 (566 candidates, 178 held out):
+Results, Oct 2026 (566 candidates, 178 held out, profiles including Emby played flags):
 
 | Model | hit@10 | MRR | AUC |
 | --- | --- | --- | --- |
-| Popularity (most IMDB votes) | 0.022 | 0.018 | 0.491 |
-| `GenreKNN` | 0.034 | 0.023 | 0.545 |
-| **`ContentKNN`** | **0.096** | **0.042** | **0.650** |
-| keywords only | 0.073 | 0.031 | 0.615 |
-| people only | 0.067 | 0.049 | 0.566 |
-| description only | 0.022 | 0.024 | 0.549 |
+| Popularity (most IMDB votes) | 0.022 | 0.019 | 0.488 |
+| `GenreKNN` | 0.051 | 0.026 | 0.565 |
+| **`ContentKNN`** (defaults) | **0.135** | **0.070** | **0.681** |
+| keywords only | 0.084 | 0.054 | 0.636 |
+| people only | 0.096 | 0.068 | 0.585 |
+| description only | 0.028 | 0.014 | 0.562 |
+| MovieLens only | 0.067 | 0.055 | 0.429 |
+| TMDB recommendations only | 0.022 | 0.016 | 0.639 |
+
+How the default model got there:
+
+| Step | hit@10 | MRR | AUC |
+| --- | --- | --- | --- |
+| Keywords + people + description + genre | 0.096 | 0.042 | 0.650 |
+| + Emby played flags in profiles | 0.112 | 0.059 | 0.676 |
+| + MovieLens (0.3) | 0.135 | 0.070 | 0.681 |
+
+The single-block models can't score every title (e.g. MovieLens has no series); titles a model can't score are ranked last, which is why "MovieLens only" has a low AUC.
 
 What the results show:
-- Content features roughly triple hit@10 over genre-only.
+- Content features more than double hit@10 over genre-only, and MovieLens adds a collaborative signal on top.
 - Keywords and people each carry most of the signal, and they work best combined.
 - Popularity is no better than random here: what people watch on this server isn't just what's popular.
 
@@ -221,9 +246,12 @@ Results, Oct 2026 (133 held out; fewer than above, since first watches and title
 | --- | --- | --- | --- |
 | Popularity | 0.030 | 0.021 | 0.453 |
 | `GenreKNN` | 0.045 | 0.018 | 0.505 |
-| `ContentKNN` | 0.045 | 0.024 | 0.589 |
+| `ContentKNN` | 0.083 | 0.033 | 0.595 |
 | Newest first (ignores taste) | 0.376 | 0.172 | 0.760 |
-| **`ContentKNN` + freshness boost (0.3, 30 days)** | **0.368** | **0.182** | **0.820** |
+| `ContentKNN` + freshness boost (0.3, 30 days) | 0.376 | 0.202 | 0.822 |
+| **+ the user's own Jellyseerr requests (+0.1)** | **0.376** | **0.238** | **0.832** |
+
+(Emby played flags have no dates, so they can't take part in this replay.)
 
 What the results show:
 - **Recency is the strongest single signal** on this server, for movies and series alike: half of the movies people liked were first watched within 29 days of arriving, and a quarter within 5 days.
@@ -236,3 +264,24 @@ Caveat: profile weights use each earlier title's total interest, including watch
 Re-run as history grows, and use it to measure any new feature before adopting it.
 
 Demo: `PYTHONPATH=src python src/ml/main.py [IMDB ID ...]` - title-based recommendations for the given IDs (default: Baby Driver), then per-user recommendations from the Emby library.
+
+## External data sources
+
+| Source | What it adds | Setup | Licence |
+| --- | --- | --- | --- |
+| TMDB API | Keywords, cast/crew, descriptions, franchises, TMDB recommendations | `TMDB_READ_ACCESS_TOKEN`; fetched by the refresh | [TMDB API terms](https://www.themoviedb.org/api-terms-of-use): free, attribution required |
+| Emby | Played flags and favourites (`user_item_states`), date added | none; fetched by the refresh | your server |
+| MovieLens 32M | Collaborative "liked by the same people" signal for movies | `scripts/movielens/download_movielens.sh` (240 MB download, ~1 GB unpacked, in `data/movielens/`, gitignored); cached on first use in `data/cache/movielens_likers.parquet` | GroupLens: research / non-commercial use only, no endorsement implied; cite F. Maxwell Harper and Joseph A. Konstan, 2015, *The MovieLens Datasets: History and Context*, ACM TiiS 5(4) |
+| Jellyseerr | Who requested what, and when (`jellyseerr_requests`, `PreProcess.get_user_requests()`, `Requests`) | `JELLYSEERR_URL` + `JELLYSEERR_API_KEY` in `.env`; fetched by the refresh once set | your server |
+| IMDB datasets | Genres, ratings, vote counts, episode -> series | see [MySQL](../databases/mysql.md) | IMDB non-commercial licence |
+
+## **Class:** Requests
+
+Jellyseerr requests as a ranking signal, built from `PreProcess.get_user_requests()`. `boost(when, user_id, own=0.1, others=0)` gives +`own` to titles that user requested before `when`. `src/ml/main.py` adds it to the freshness boost for "fresh for you", and marks those rows `you_requested`.
+
+Evaluated on 195 requests (Dec 2025 - Oct 2026, 5 requesters):
+- **What it measures:** 25 of the 133 time-aware test titles had been requested by that person beforehand. They already ranked well thanks to freshness (median rank 4), and the boost puts them first (median rank 1).
+- **Result:** MRR 0.202 -> 0.238 and AUC 0.822 -> 0.832, with no change to the rest. Results plateau from 0.05 to 0.15.
+- **Other people's requests:** boosting these made results worse, so `others` is 0.
+- **Not used in profiles:** only about 1 in 4 requests is watched by its requester. Adding requested titles to profiles (`PreProcess.get_requested_titles()`) lowered both evaluations at every weight tried (0.25-1.0).
+- **Never excluded:** requested titles are never removed from recommendations, since "the thing you asked for has arrived" is a fair recommendation.

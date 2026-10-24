@@ -105,6 +105,13 @@ except Exception as e:
 sqlite._connection.close()
 os.replace(working_path, db_path)
 
+# keep the newest backups only (one is made per run); the archive/ dir is never touched
+KEEP_BACKUPS = int(os.getenv("SQLITE_KEEP_BACKUPS") or 30)
+backups = sorted(BACKUP_DIR.glob(f"{SQLITE_DB_NAME}_*.backup"), key=lambda p: p.stat().st_mtime, reverse=True)
+for old in backups[KEEP_BACKUPS:]:
+    old.unlink()
+    print(f"[INFO] Removed old backup {old.name}")
+
 finished_at = datetime.now(tz=tz).strftime("%Y-%m-%d %H:%M:%S %Z")
 Notifications().discord_send_webhook(
     f"Cron job: Emby watch history refresh finished at {finished_at}\n"

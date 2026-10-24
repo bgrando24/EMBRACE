@@ -4,87 +4,86 @@ The optional machine-learning workflow enriches recommendations with IMDB metada
 
 ## When you need MySQL
 
-You only need this stack if you plan to run `PreProcess.imdb_get_encoded_genres()` or any downstream tasks that require one-hot encoded IMDB genres. The preprocessing step queries MySQL for `titles` and `genres`, aggregates them, and writes a cached Parquet/PKL file under `data/cache/` for reuse.
+You need this stack to build the genre recommender's data (`PreProcess.imdb_get_encoded_genres()`, cached under `data/cache/` afterwards) and for the episode -> series fallback in `PreProcess.map_emby_items_to_imdb()`. The Emby/SQLite side of EMBRACE works without it.
 
 ## Directory layout
 
 ```
 scripts/mysql/
-├── Dockerfile
 ├── docker-compose.yml
 ├── .env.example
 ├── README.md
+├── download_imdb.sh
 ├── imdb_create-schema.py
 ├── imdb_load-from-tsv.py
 ├── imdb_reset.py
 └── init_scripts/
-    └── set_usr_perms.sh
+    └── 01_grant_file_priv.sh
 ```
 
-- `Dockerfile` builds a thin wrapper around the official MySQL image.
-- `docker-compose.yml` wires storage, the `.env` credentials, and a bind mount that exposes the raw TSV dumps at `/import` inside the container.
+- `docker-compose.yml` runs the official `mysql:9.4.0` image, with the database in a named volume, credentials from `.env`, and the raw TSV directory mounted read-only at `/import` inside the container. The port is published on `127.0.0.1` only unless `MYSQL_BIND_ADDRESS` is set.
+- `init_scripts/` runs on first boot (empty data volume) and grants the `FILE` privilege the loader needs.
+- `download_imdb.sh` fetches and decompresses the TSVs and records a `MANIFEST.tsv` (download time, size, sha256).
 - `imdb_create-schema.py` and `imdb_load-from-tsv.py` are the two primary scripts for first-time setup.
-- `imdb_reset.py` truncates all tables so you can perform a clean reload without dropping the database.
+- `imdb_reset.py` truncates all tables so you can perform a clean reload without dropping the database. It is destructive: read it first.
+
+## Where it runs
+
+The database runs on **optiplex01** (`/opt/stacks/embrace-mysql`, visible in Dockge), with the TSVs in `~/data/imdb`. The port is only published on optiplex01's localhost, so from another machine use an SSH tunnel and point `scripts/mysql/.env` at it:
+
+```sh
+ssh -fN -L 3306:127.0.0.1:3306 optiplex01      # MYSQL_HOST=127.0.0.1, MYSQL_PORT=3306 in scripts/mysql/.env
+```
 
 ## Prerequisites
 
-1. **Download the IMDB TSV dumps** from [https://datasets.imdbws.com/](https://datasets.imdbws.com/). Extract them somewhere on your host machine.
-2. **Set up credentials** by copying both `.env` templates and filling in strong passwords:
+1. **Set up credentials** by copying both `.env` templates and filling in strong passwords and `IMDB_DATA_DIR` (absolute path to the TSV directory):
 
    ```sh
    cp .env.example .env
    cp scripts/mysql/.env.example scripts/mysql/.env
    ```
 
-3. **Export `IMDB_DATA_DIR`** before starting docker-compose so the TSV directory mounts at `/import` inside the container:
+2. **Download the IMDB TSV dumps** (about 7 GB uncompressed):
 
    ```sh
-   export IMDB_DATA_DIR=/absolute/path/to/imdb-tsv
+   scripts/mysql/download_imdb.sh
    ```
 
 ## Bootstrapping the database
 
-1. **Build and start MySQL**
+1. **Start MySQL**
 
    ```sh
    cd scripts/mysql
-   docker compose up -d --build
+   docker compose up -d
    ```
 
-   The compose file enables `--secure-file-priv=/import` and `--local-infile=ON`, allowing the loader scripts to stream TSVs directly into staging tables.
+   The compose file enables `--secure-file-priv=/import` and `--local-infile=ON`, allowing the loader scripts to stream TSVs directly into staging tables. On first boot the init script grants `FILE` to `MYSQL_USER`.
 
-2. **Grant file permissions** (first run only)
-
-   ```sh
-   ./init_scripts/set_usr_perms.sh
-   ```
-
-   This wrapper runs `GRANT FILE` for the application user using the root credentials you supplied.
-
-3. **Create schemas**
+2. **Create schemas** (from the project root, using the project venv)
 
    ```sh
-   python3 imdb_create-schema.py
+   PYTHONPATH=src python scripts/mysql/imdb_create-schema.py
    ```
 
    The script connects via `MySQLConnector`, ensures the database exists, and creates the target tables (`titles`, `genres`, `directors`, `writers`, `episodes`, `roles`, `ratings`, `persons`) along with staging tables used during data loads.
 
-4. **Load TSV data**
+3. **Load TSV data**
 
    ```sh
-   python3 imdb_load-from-tsv.py
+   PYTHONPATH=src python scripts/mysql/imdb_load-from-tsv.py
    ```
 
-   Each block wraps a table load in a timing context, bulk imports the TSV into a staging table (where required), and then inserts the normalized rows into the destination table. Expect this step to take several minutes depending on disk speed.
+   Each block wraps a table load in a timing context, bulk imports the TSV into a staging table (where required), and then inserts the normalized rows into the destination table. The `roles` table (~95M rows) dominates; expect tens of minutes. Run it detached (`tmux`, or `systemd-run --user`) so a dropped SSH session doesn't kill it.
 
-5. **Verify row counts**
-
-   After the loader finishes, you can run quick sanity checks:
+4. **Verify row counts** with exact counts - `information_schema.TABLES.TABLE_ROWS` is only an InnoDB estimate:
 
    ```sh
-   docker compose exec db mysql -u${MYSQL_USER} -p${MYSQL_PASSWORD} ${MYSQL_DATABASE} \
-     -e "SELECT TABLE_NAME, TABLE_ROWS FROM information_schema.tables WHERE TABLE_SCHEMA='${MYSQL_DATABASE}' ORDER BY TABLE_ROWS DESC;"
+   docker compose exec db sh -c 'mysql -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE" -e "SELECT COUNT(*) FROM titles; SELECT COUNT(*) FROM roles;"'
    ```
+
+5. **Rebuild the genre cache** used by the recommender: `PreProcess().imdb_get_encoded_genres(refresh=True)`.
 
 6. **Shut down** (optional)
 
@@ -95,7 +94,7 @@ scripts/mysql/
 ## Maintenance workflow
 
 - **Refresh data**: rerun `imdb_load-from-tsv.py` after downloading new IMDB dumps. Use `imdb_reset.py` beforehand if you want to truncate tables instead of appending.
-- **Cache management**: delete or refresh `data/cache/imdb_genres_ohe.parquet` if you need to rebuild the encoded dataset after a reload.
+- **Cache management**: call `PreProcess().imdb_get_encoded_genres(refresh=True)` after a reload to rebuild `data/cache/imdb_genres_<types>.parquet`.
 - **Connection reuse**: the Python code instantiates `MySQLConnector` with `scripts/mysql/.env` to discover credentials, so keep that file updated if hosts or ports change.
 
-With these pieces in place, `PreProcess.imdb_get_encoded_genres()` can connect to MySQL, fetch the latest title/genre associations, and generate the sparse one-hot vectors used by the k-NN example in `src/main.py`.
+With these pieces in place, `PreProcess.imdb_get_encoded_genres()` can connect to MySQL, fetch the latest title/genre associations, and generate the multi-hot genre vectors used by `GenreKNN` (demo: `src/ml/main.py`).

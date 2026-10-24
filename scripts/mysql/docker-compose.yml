@@ -1,12 +1,14 @@
 services:
   db:
-    image: embrace-mysql
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: mysql:9.4.0
     container_name: embrace-mysql
+    # run as the image's mysql user: as root, the entrypoint tries to chown the --secure-file-priv dir (/import),
+    # which fails on the read-only mount and crash-loops the container. The TSVs only need to be world-readable.
+    user: "999:999"
     ports:
-      - "3306:3306"
+      # localhost only by default; reach it from another machine with an SSH tunnel (see README),
+      # or set MYSQL_BIND_ADDRESS in .env to publish it on a LAN/Tailscale address instead
+      - "${MYSQL_BIND_ADDRESS:-127.0.0.1}:${MYSQL_PORT:-3306}:3306"
     env_file:
       - .env
     command:
@@ -17,8 +19,8 @@ services:
       - --collation-server=utf8mb4_0900_ai_ci
     volumes:
       - mysql_data:/var/lib/mysql                  # data lives in a named volume
-      - ./init_scripts:/docker-entrypoint-initdb.d # optional first-boot SQL
-      - ${IMDB_DATA_DIR}:/import:ro                # your TSVs, read-only
+      - ./init_scripts:/docker-entrypoint-initdb.d # first-boot setup, runs only when the data volume is empty
+      - ${IMDB_DATA_DIR:?set IMDB_DATA_DIR in .env}:/import:ro  # your TSVs, read-only
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$${MYSQL_ROOT_PASSWORD} || exit 1"]
       interval: 10s

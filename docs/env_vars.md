@@ -11,6 +11,7 @@ Two `.env` files are required: one at the repository root for the Python service
 | `TMDB_READ_ACCESS_TOKEN` | Yes for TMDB sync | TMDB “read access token” used by the TMDB connector and by the SQLite ingestion pipeline when mapping genre IDs. |
 | `ENVIRONMENT` | Optional | Controls connector debug logging. Use `dev`, `staging`, or `prod`; defaults to `dev` when unset. |
 | `SQLITE_DB_NAME` | Optional | Overrides the default SQLite file name (`EMBRACE_SQLITE_DB.db`). The database is stored under `sqlite_db/` and is created automatically if missing. |
+| `SQLITE_KEEP_BACKUPS` | Optional | Number of dated database backups the refresh keeps in `sqlite_db/backups/` (one is made per run). Default `30`. `sqlite_db/archive/` is never pruned. |
 | `IMDB_DB_PATH` | Optional | Path to a custom IMDB dataset build. Future preprocessing steps can use this to point at an alternative dataset without reconfiguring the MySQL connector. Keep this unset unless you have a non-default ingest pipeline. |
 
 ## `scripts/mysql/.env`

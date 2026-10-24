@@ -1,6 +1,30 @@
-# Cron Jobs
+# Scheduled Jobs
 
-EMBRACE currently only has one cron job implemented, but more in the future are planned.
+EMBRACE currently has one scheduled job: the daily Emby watch history refresh. It can be scheduled with a **systemd user timer** (used on optiplex01) or with **cron**; both run the same Python script.
+
+## systemd timer (optiplex01)
+
+Unit files live in `scripts/systemd/` and assume the repo is at `~/src/EMBRACE` with a venv at `~/src/EMBRACE/venv`. A timer catches up a run missed while the machine was off (`Persistent=true`) and never runs two refreshes at once.
+
+```sh
+mkdir -p ~/.config/systemd/user
+ln -sf ~/src/EMBRACE/scripts/systemd/embrace-refresh.{service,timer} ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now embrace-refresh.timer
+loginctl enable-linger "$USER"     # keep user timers running without a login session
+
+systemctl --user start embrace-refresh.service   # run once now
+journalctl --user -u embrace-refresh -n 50       # logs
+systemctl --user list-timers embrace-refresh.timer
+```
+
+The canonical SQLite database is the one on the machine running the refresh (optiplex01: `~/src/EMBRACE/sqlite_db/`). To work with a current copy elsewhere:
+
+```sh
+scp optiplex01:src/EMBRACE/sqlite_db/EMBRACE_db.db sqlite_db/
+```
+
+## Cron
 
 
 ### Emby Watch History Refresh

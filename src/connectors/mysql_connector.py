@@ -81,14 +81,16 @@ class MySQLConnector:
                 password            = DB_USER_PWD,
                 database            = DB_NAME,
                 allow_local_infile  =True,
+                connection_timeout  = 10,   # fail fast when the database host is offline
             )
 
             if not self.db.connection_id:
                 raise RuntimeError(f"Error with database connection object, current object: {self.db}")
-            
+
         except MySQLError as e:
+            # raise rather than exit, so optional IMDB features can carry on without the database
             print(f"ERROR: Database connection failed: {e}", file=sys.stderr)
-            sys.exit(1)
+            raise ConnectionError(f"MySQL connection to {DB_HOST}:{DB_PORT} failed: {e}") from e
 
         self.curs: Final = self.db.cursor()
         self._DB_NAME: Final = DB_NAME

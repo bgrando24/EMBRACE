@@ -777,7 +777,7 @@ class SQLiteConnector:
 
     def _INIT_create_library_items_schema(self) -> bool:
         """
-        Creates the library_items table for movie/episode metadata
+        Creates the library_items table for movie/series/episode metadata
         """
         
         if self._connection is None:
@@ -791,7 +791,7 @@ class SQLiteConnector:
             CREATE TABLE IF NOT EXISTS library_items (
                 item_id TEXT PRIMARY KEY,
                 item_name TEXT NOT NULL,
-                item_type TEXT NOT NULL,  -- 'Episode' or 'Movie'
+                item_type TEXT NOT NULL,  -- 'Movie', 'Series' or 'Episode'
                 
                 -- Episode-specific fields
                 series_name TEXT,
@@ -917,7 +917,7 @@ class SQLiteConnector:
 
     def ingest_all_library_items(self, emby_items_iterable, get_item_metadata: Optional[Callable[[str], dict]] = None) -> bool:
         """
-        Ingest EVERY Movie/Episode from Emby into library_items (+ genres/tags + provider ids).
+        Ingest EVERY Movie/Series/Episode from Emby into library_items (+ genres/tags + provider ids).
         emby_items_iterable should yield BaseItemDto dicts (see EmbyConnector.iter_all_items()).
         Optionally provide get_item_metadata(item_id: str) to enable series-level genre fallback for Episodes.
         """
@@ -1189,12 +1189,112 @@ class SQLiteConnector:
 
 
 
+    # ====================================================================== User aliases ======================================================================
+
+    def _ensure_user_aliases_schema(self) -> bool:
+        """
+        Creates (if doesn't exist) `user_aliases`: maps an Emby user ID to the canonical user ID of the same person.
+
+        Needed because Emby user IDs change when the server is rebuilt (and someone can rename/recreate their account),
+        so one person's history can sit under several user IDs. Users without an alias are their own canonical user.
+        """
+        if self._connection is None or self._cursor is None:
+            print("[SQLiteConnector] ERROR: DB not connected", file=sys.stderr)
+            return False
+        self._cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_aliases(
+                alias_user_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,      -- canonical user ID
+                note TEXT,
+                created_timestamp TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        self._connection.commit()
+        return True
+
+    def set_user_alias(self, alias_user_id: str, user_id: str, note: str | None = None) -> bool:
+        """
+        Records that `alias_user_id` is the same person as the canonical `user_id`.
+
+        Args:
+            alias_user_id (str): The old/other Emby user ID
+            user_id (str): The canonical Emby user ID (usually the current account)
+            note (str, optional): Free text, e.g. why they're the same person
+        """
+        if alias_user_id == user_id:
+            print("[SQLiteConnector] ERROR: A user can't be an alias of itself", file=sys.stderr)
+            return False
+        if not self._ensure_user_aliases_schema():
+            return False
+        # keep it one level deep: the canonical user must not itself be an alias
+        row = self._cursor.execute("SELECT user_id FROM user_aliases WHERE alias_user_id = ?", (user_id,)).fetchone()
+        if row is not None:
+            print(f"[SQLiteConnector] ERROR: {user_id} is itself an alias of {row[0]}, use that as the canonical user", file=sys.stderr)
+            return False
+        self._cursor.execute(
+            "INSERT OR REPLACE INTO user_aliases(alias_user_id, user_id, note) VALUES(?,?,?)",
+            (alias_user_id, user_id, note),
+        )
+        # anything that pointed at the new alias now points at its canonical user
+        self._cursor.execute("UPDATE user_aliases SET user_id = ? WHERE user_id = ?", (user_id, alias_user_id))
+        self._connection.commit()
+        return True
+
+    def get_user_aliases(self) -> pd.DataFrame:
+        """Returns the user_aliases table (alias_user_id, user_id, note) as a pandas DataFrame"""
+        if not self._ensure_user_aliases_schema():
+            exit(1)
+        return pd.read_sql_query("SELECT alias_user_id, user_id, note FROM user_aliases", self._connection)
+
+
+
     # ====================================================================== Table fetch methods ======================================================================
 
     def get_watch_hist_user_items_stats(self) -> pd.DataFrame:
         """Returns the watch_hist_user_item_stats table as a pandas DataFrame"""
-        
         if self._connection is None:
             print("[SQLiteConnector] ERROR: DB not connected", file=sys.stderr)
             exit(1)
         return pd.read_sql_query("SELECT * FROM watch_hist_user_item_stats", self._connection)
+    
+    def get_item_provider_ids(self) -> pd.DataFrame:
+        """Returns the item_provider_ids table as a pandas DataFrame"""
+        if self._connection is None:
+            print("[SQLiteConnector] ERROR: DB not connected", file=sys.stderr)
+            exit(1)
+        return pd.read_sql_query("SELECT * FROM item_provider_ids", self._connection)
+    
+    def get_watch_hist_users(self) -> pd.DataFrame:
+        """Returns each user_id seen in the watch history with its (latest) user_name as a pandas DataFrame"""
+        if self._connection is None:
+            print("[SQLiteConnector] ERROR: DB not connected", file=sys.stderr)
+            exit(1)
+        # SQLite returns user_name from the row holding the MAX() when it's a bare column alongside it
+        users = pd.read_sql_query(
+            """SELECT user_id, user_name, MAX(date || ' ' || time) AS last_seen
+               FROM watch_hist_raw_events GROUP BY user_id""",
+            self._connection,
+        )
+        return users.drop(columns="last_seen")
+    
+    def get_watch_hist_items(self) -> pd.DataFrame:
+        """Returns each item_id seen in the watch history with its (latest) item_name and item_type as a pandas DataFrame"""
+        if self._connection is None:
+            print("[SQLiteConnector] ERROR: DB not connected", file=sys.stderr)
+            exit(1)
+        items = pd.read_sql_query(
+            """SELECT item_id, item_name, item_type, MAX(date || ' ' || time) AS last_seen
+               FROM watch_hist_raw_events GROUP BY item_id""",
+            self._connection,
+        )
+        return items.drop(columns="last_seen")
+
+    def get_library_items(self) -> pd.DataFrame:
+        """Returns the identity columns of library_items (incl. removed items) as a pandas DataFrame"""
+        if self._connection is None:
+            print("[SQLiteConnector] ERROR: DB not connected", file=sys.stderr)
+            exit(1)
+        return pd.read_sql_query(
+            "SELECT item_id, item_name, item_type, series_id, series_name, production_year, removed_at FROM library_items",
+            self._connection,
+        )

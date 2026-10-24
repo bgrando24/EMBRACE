@@ -160,7 +160,7 @@ class EmbyConnector:
     self,
     start_index: int = 0,
     limit: int = 1000,
-    include_item_types: Tuple[str, ...] = ("Movie", "Episode"),
+    include_item_types: Tuple[str, ...] = ("Movie", "Series", "Episode"),
     parent_id: Optional[str] = None,
     fields: Optional[str] = None,
     recursive: bool = True,
@@ -188,14 +188,15 @@ class EmbyConnector:
 
     def iter_all_items(
         self,
-        include_item_types: Tuple[str, ...] = ("Movie", "Episode"),
+        include_item_types: Tuple[str, ...] = ("Movie", "Series", "Episode"),
         parent_id: Optional[str] = None,
         page_size: int = 1000,
         fields: Optional[str] = None,
         recursive: bool = True,
     ) -> Iterable[dict]:
         """
-        Yields every item (Movie + Episode by default) across the library, paging until complete.
+        Yields every item (Movie + Series + Episode by default) across the library, paging until complete.
+        Series are included so episodes can be linked to their show's provider IDs (e.g. the series' IMDb ID).
         """
         start = 0
         total = None

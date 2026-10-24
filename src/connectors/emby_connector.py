@@ -274,3 +274,74 @@ class EmbyConnector:
             raise RuntimeError(f"Emby /Items returned {yielded} of {total} items, library fetch is incomplete")
             
         
+
+
+    # ====================================================================== Playlists ======================================================================
+
+    def get_user_playlists(self, user_id: str) -> dict[str, str]:
+        """
+        The user's own playlists (Emby only lists a playlist to its owner)
+
+        Returns:
+            dictionary: key = playlist name, value = playlist ID
+        """
+        response = requests.get(
+            f"{self.__BASE_DOMAIN}/Users/{user_id}/Items",
+            params={"Recursive": "true", "IncludeItemTypes": "Playlist", "api_key": self.__EMBY_API_KEY},
+            timeout=30,
+        )
+        response.raise_for_status()
+        return {p["Name"]: p["Id"] for p in response.json().get("Items", [])}
+
+    def get_playlist_entries(self, playlist_id: str, user_id: str) -> list[tuple[str, str]]:
+        """
+        Returns:
+            list of tuple: (entry ID, item ID) in playlist order - the entry ID is what removing an entry needs
+        """
+        response = requests.get(
+            f"{self.__BASE_DOMAIN}/Playlists/{playlist_id}/Items",
+            params={"UserId": user_id, "api_key": self.__EMBY_API_KEY},
+            timeout=30,
+        )
+        response.raise_for_status()
+        return [(i["PlaylistItemId"], i["Id"]) for i in response.json().get("Items", [])]
+
+    def set_user_playlist(self, user_id: str, name: str, item_ids: Sequence[str]) -> str:
+        """
+        Makes the user's playlist called `name` hold exactly `item_ids`, in order, creating it if needed. Only ever
+        touches that one playlist. Note adding a Series adds all its episodes - pass an episode to stand for a show.
+
+        Returns:
+            str: "created", "updated" or "unchanged"
+        """
+        playlist_id = self.get_user_playlists(user_id).get(name)
+        if playlist_id is None and not item_ids:
+            return "unchanged"
+        if playlist_id is None:
+            response = requests.post(
+                f"{self.__BASE_DOMAIN}/Playlists",
+                params={"Name": name, "Ids": ",".join(item_ids), "UserId": user_id, "MediaType": "Video",
+                        "api_key": self.__EMBY_API_KEY},
+                timeout=30,
+            )
+            response.raise_for_status()
+            return "created"
+
+        entries = self.get_playlist_entries(playlist_id, user_id)
+        if [item for _, item in entries] == list(item_ids):
+            return "unchanged"
+        if entries:
+            response = requests.delete(
+                f"{self.__BASE_DOMAIN}/Playlists/{playlist_id}/Items",
+                params={"EntryIds": ",".join(entry for entry, _ in entries), "api_key": self.__EMBY_API_KEY},
+                timeout=30,
+            )
+            response.raise_for_status()
+        if item_ids:
+            response = requests.post(
+                f"{self.__BASE_DOMAIN}/Playlists/{playlist_id}/Items",
+                params={"Ids": ",".join(item_ids), "UserId": user_id, "api_key": self.__EMBY_API_KEY},
+                timeout=30,
+            )
+            response.raise_for_status()
+        return "updated"

@@ -8,5 +8,6 @@ from .content_knn import ContentKNN
 from .freshness import Freshness
 from .requests_signal import Requests
 from .user_profiles import UserProfiles, title_interest
+from .picks import Recommender
 
-__all__ = ["PreProcess", "CosineKNN", "GenreKNN", "ContentKNN", "Freshness", "Requests", "UserProfiles", "title_interest"]
+__all__ = ["PreProcess", "CosineKNN", "GenreKNN", "ContentKNN", "Freshness", "Requests", "UserProfiles", "title_interest", "Recommender"]

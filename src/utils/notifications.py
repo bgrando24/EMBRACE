@@ -66,3 +66,24 @@ class Notifications:
             print(f"ERROR [discord_send_webhook]: Request failed: {exc}")
 
         return False
+
+
+    @staticmethod
+    def split_message(lines: list[str], limit: int = 2000) -> list[str]:
+        """Joins lines into as few messages as fit Discord's limit, breaking only between lines (a single line
+           longer than the limit is cut)"""
+        messages, current = [], ""
+        for line in lines:
+            line = line[:limit]
+            if current and len(current) + 1 + len(line) > limit:
+                messages.append(current)
+                current = line
+            else:
+                current = f"{current}\n{line}" if current else line
+        if current:
+            messages.append(current)
+        return messages
+
+    def discord_send_lines(self, lines: list[str]) -> bool:
+        """`discord_send_webhook()` for text that may be longer than one message. Returns True if every part was sent."""
+        return all([self.discord_send_webhook(m) for m in self.split_message(lines)])

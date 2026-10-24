@@ -121,6 +121,37 @@ class PreProcess:
         return set(prov.loc[(prov["provider"] == "imdb") & prov["item_id"].isin(current), "provider_item_id"])
 
 
+    def get_playlist_items(self) -> pd.Series:
+        """
+        The Emby item to put in a playlist for each library movie/series. Adding a series to an Emby playlist adds
+        every episode, so a series is represented by its first episode (lowest season >= 1, then episode number;
+        specials and unnumbered episodes only when there's nothing else). A movie in the library twice uses the
+        version added first.
+
+        Returns:
+            Series: t_const -> Emby item ID, for current (not removed) items only
+        """
+        lib = self.sqlite.get_library_items()
+        lib = lib[lib["removed_at"].isna()]
+        prov = self.sqlite.get_item_provider_ids()
+        imdb = prov[prov["provider"] == "imdb"].drop_duplicates("item_id").set_index("item_id")["provider_item_id"]
+
+        movies = lib[lib["item_type"] == "Movie"].assign(t_const=lambda d: d["item_id"].map(imdb))
+        movies = movies.dropna(subset=["t_const"]).sort_values(["date_created", "item_id"], na_position="last")
+        movies = movies.drop_duplicates("t_const").set_index("t_const")["item_id"]
+
+        episodes = lib[(lib["item_type"] == "Episode") & lib["series_id"].notna()]
+        numbered = episodes["season_number"].fillna(0) >= 1
+        episodes = episodes.assign(numbered=numbered).sort_values(
+            ["numbered", "season_number", "episode_number", "item_id"], ascending=[False, True, True, True], na_position="last")
+        first_episode = episodes.drop_duplicates("series_id").set_index("series_id")["item_id"]
+        series = lib[lib["item_type"] == "Series"].assign(t_const=lambda d: d["item_id"].map(imdb),
+                                                          first=lambda d: d["item_id"].map(first_episode))
+        series = series.dropna(subset=["t_const", "first"]).sort_values("item_id").drop_duplicates("t_const")
+        series = series.set_index("t_const")["first"]
+        return pd.concat([movies, series[~series.index.isin(movies.index)]]).rename("item_id")
+
+
     def get_title_content(self, imdb_titles: pd.DataFrame | None = None, movielens: pd.Series | None = None) -> pd.DataFrame:
         """
         One row per IMDB title with fetched TMDB details (see `SQLiteConnector.ingest_tmdb_title_details`), for

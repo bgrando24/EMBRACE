@@ -1,6 +1,8 @@
 # Scheduled Jobs
 
-EMBRACE currently has one scheduled job: the daily Emby watch history refresh. It can be scheduled with a **systemd user timer** (used on optiplex01) or with **cron**; both run the same Python script.
+EMBRACE has two scheduled jobs:
+- **Refresh:** the daily Emby watch history refresh. It can be scheduled with a **systemd user timer** (used on optiplex01) or with **cron**; both run the same Python script.
+- **Picks:** the nightly recommendation playlists, which run straight after the refresh (systemd only).
 
 ## systemd timer (optiplex01)
 
@@ -23,6 +25,20 @@ The canonical SQLite database is the one on the machine running the refresh (opt
 ```sh
 scp optiplex01:src/EMBRACE/sqlite_db/EMBRACE_db.db sqlite_db/
 ```
+
+### Daily picks
+
+`embrace-picks.service` runs `scripts/picks/daily_picks.py` (see [Daily picks](../modules/ml.md#daily-picks-recommender-mlpicks)).
+- **Trigger:** it has no timer of its own. Enabling it links it to the refresh, which pulls it in on every run.
+- **Order:** it starts once the refresh has finished, even if the refresh failed, since yesterday's data still makes fair picks.
+
+```sh
+systemctl --user enable ~/src/EMBRACE/scripts/systemd/embrace-picks.service   # links it + hooks it to the refresh
+systemctl --user start embrace-picks.service      # run once now
+journalctl --user -u embrace-picks -n 50
+```
+
+The job needs the IMDB MySQL database (or its genre cache in `data/cache/`). For the collaborative signal, it also needs MovieLens in `data/movielens/`.
 
 ## Cron
 

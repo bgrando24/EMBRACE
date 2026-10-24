@@ -1,6 +1,7 @@
 import sys
 import pandas as pd
-from ml import PreProcess, GenreKNN, ContentKNN, Freshness, Requests, UserProfiles
+from ml import PreProcess, Recommender
+from ml.picks import BACK_CATALOGUE, FRESH
 
 # usage (from project root): PYTHONPATH=src python src/ml/main.py [IMDB ID ...]
 # e.g. PYTHONPATH=src python src/ml/main.py tt3890160     (Baby Driver)
@@ -8,26 +9,11 @@ from ml import PreProcess, GenreKNN, ContentKNN, Freshness, Requests, UserProfil
 pd.set_option("display.width", 200)
 pd.set_option("display.max_colwidth", 60)
 
-#---- genre model: one row per IMDB movie/series, multi-hot encoded genres (cached after the first MySQL fetch) ----
+#---- the default model (ContentKNN with MovieLens, else GenreKNN) + profiles, freshness and requests ----
 pp = PreProcess()
-titles = pp.imdb_get_encoded_genres()
-genre_knn = GenreKNN(titles)
-library = pp.get_library_imdb_ids()
-print(f"Genre model: {len(genre_knn.titles)} titles. Emby library: {len(library)} movies/series with an IMDB ID")
-
-#---- content model: TMDB keywords, people and descriptions for library titles (fetched by the daily refresh) ----
-# MovieLens (optional, see docs/modules/ml.md): collaborative "people who liked X also liked Y" for movies
-try:
-    movielens = pp.get_movielens_likers()
-except FileNotFoundError:
-    print("MovieLens not downloaded (scripts/movielens/download_movielens.sh), its block stays empty")
-    movielens = None
-try:
-    knn = ContentKNN(pp.get_title_content(titles, movielens))
-    print(f"Content model: {len(knn.titles)} titles, weights {knn.weights}")
-except ValueError as e:
-    print(f"Content model unavailable ({e}), using the genre model")
-    knn = genre_knn
+rec = Recommender.load(pp)
+knn, library = rec.knn, rec.library
+print(f"{type(knn).__name__}: {len(knn.titles)} titles. Emby library: {len(library)} movies/series with an IMDB ID")
 
 # ------------- title-based recommendations -> "because you watched X, here are similar titles."
 seeds = sys.argv[1:] or ["tt3890160"]
@@ -40,28 +26,17 @@ for seed in seeds:
     print(knn.recommend(seed, n=10, allowed=library).drop(columns="type").to_string(index=False))
 
 # ------------- watch history-based recommendations -> "based on everything you've watched, try these."
-# Two lists: what people actually watch next is mostly what just arrived (see docs/modules/ml.md#evaluation), so
-# "fresh for you" ranks new arrivals by taste; "back catalogue" is taste alone, which surfaces older titles that
-# Emby's own "Latest" row won't.
-user_titles, _ = pp.get_user_title_stats()
-# titles Emby has marked played but that aren't in the watch history: they fill in profiles and are never recommended
-user_titles = pd.concat([user_titles, pp.get_played_titles(user_titles)], ignore_index=True)
-profiles = UserProfiles(knn, user_titles)
-freshness = Freshness(pp.get_title_additions())
-fresh = freshness.boost() if len(freshness.at()) else None    # no dates until the refresh stores DateCreated
-requests = Requests(pp.get_user_requests())                   # empty without Jellyseerr configured
+# Two lists (see ml.picks): "fresh" ranks new arrivals by taste, because what people actually watch next is mostly
+# what just arrived (see docs/modules/ml.md#evaluation); "back catalogue" is taste alone, minus the fresh list.
+# The same picks go into Emby playlists nightly: scripts/picks/daily_picks.py
 print("\n=== Users")
-print(profiles.users().drop(columns="user_id").round(1).to_string(index=False))
-for user_id, user_name in profiles.users()[["user_id", "user_name"]].itertuples(index=False):
-    shares = profiles.genre_shares(user_id).head(5)
+print(rec.profiles.users().drop(columns="user_id").round(1).to_string(index=False))
+for user_id, user_name in rec.profiles.users()[["user_id", "user_name"]].itertuples(index=False):
+    shares = rec.profiles.genre_shares(user_id).head(5)
     print(f"\n=== {user_name} - " + ", ".join(f"{g} {s:.0%}" for g, s in shares.items()))
-    cols = ["primary_name", "start_year", "similarity", "because_you_watched", "shared"]
-    if fresh is not None:
-        mine = requests.boost(user_id=user_id)
-        recs = profiles.recommend(user_id, n=5, allowed=library, boost=fresh.add(mine, fill_value=0))
-        recs["added_days_ago"] = recs["t_const"].map(freshness.at()["age_days"]).round(0)
-        recs["you_requested"] = recs["t_const"].isin(mine.index)
-        print("-- fresh for you:")
-        print(recs[cols[:3] + ["added_days_ago", "you_requested"] + cols[3:]].to_string(index=False))
-    print("-- from the back catalogue:" if fresh is not None else "-- recommendations:")
-    print(profiles.recommend(user_id, n=10, allowed=library)[cols].to_string(index=False))
+    picks = rec.picks(user_id, n=10)
+    for lst, cols in [(FRESH, ["added_days_ago", "you_requested"]), (BACK_CATALOGUE, [])]:
+        mine = picks[picks["list"] == lst]
+        if len(mine):
+            print(f"-- {lst.replace('_', ' ')}:")
+            print(mine[["primary_name", "start_year", "similarity"] + cols + ["because_you_watched", "shared"]].head(5 if lst == FRESH else 10).to_string(index=False))

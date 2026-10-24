@@ -77,6 +77,12 @@ Read the details with `get_tmdb_title_details()`, or `PreProcess.get_title_conte
 - **Columns:** `request_id`, `media_type`, `tmdb_id`, `status`, `media_status`, `requested_at`, `updated_at`, `requester_id`, `requester_name`, `requester_emby_id`.
 - **Linking:** `PreProcess.get_user_requests()` links each request to a watch-history user (by Emby user ID, else by name, then through aliases) and to an IMDB title (through TMDB details).
 
+## Recommendation log
+
+`recommendation_log`: every pick the nightly job showed, one row per (`generated_at`, `user_id`, `list`, `rank`). `log_recommendations(picks, model)` appends a run, and rows are never rewritten.
+- **Columns:** `generated_at`, `user_id`, `list` (`fresh` / `back_catalogue`), `rank`, `t_const`, `item_id` (the Emby item put in the playlist), `score`, `similarity`, `because_you_watched`, `model`.
+- **Purpose:** comparing it with later watch history gives a real-world hit rate, alongside the offline evaluation in `ml.evaluate`.
+
 ## Watch history tables
 
 The watch-history pipeline converts raw Emby playback events into progressively richer aggregates.

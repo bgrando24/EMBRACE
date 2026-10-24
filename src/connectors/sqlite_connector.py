@@ -1517,6 +1517,73 @@ class SQLiteConnector:
         return pd.read_sql_query("SELECT * FROM jellyseerr_requests", self._connection)
 
 
+    # ====================================================================== Recommendation log ======================================================================
+
+    def _ensure_recommendation_log_schema(self) -> bool:
+        """
+        Creates (if doesn't exist) `recommendation_log`: every pick shown to a user, one row per (run, user, list,
+        rank). Appended on each run and never rewritten, so later watch history can show which picks were watched.
+        """
+        try:
+            self._connection.execute("""
+                CREATE TABLE IF NOT EXISTS recommendation_log(
+                    generated_at TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    list TEXT NOT NULL,
+                    rank INTEGER NOT NULL,
+                    t_const TEXT NOT NULL,
+                    item_id TEXT,
+                    score REAL,
+                    similarity REAL,
+                    because_you_watched TEXT,
+                    model TEXT,
+                    PRIMARY KEY (generated_at, user_id, list, rank)
+                )""")
+            self._connection.commit()
+            return True
+        except sqlite3.Error as e:
+            print(f"[SQLiteConnector] ERROR: Failed to create recommendation_log: {e}", file=sys.stderr)
+            return False
+
+    def log_recommendations(self, picks: pd.DataFrame, model: str, generated_at: Optional[str] = None) -> int:
+        """
+        Appends one run's picks.
+
+        Args:
+            picks (DataFrame): `ml.Recommender.all_picks()` output, plus an optional `item_id` (the Emby item used)
+            model (str): which model made them, e.g. "ContentKNN"
+            generated_at (str, optional): DEFAULT: now
+
+        Returns:
+            int: rows stored, or -1 on failure
+        """
+        if self._connection is None or not self._ensure_recommendation_log_schema():
+            return -1
+        generated_at = generated_at or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        item_ids = picks["item_id"] if "item_id" in picks else pd.Series(None, index=picks.index)
+        rows = [
+            (generated_at, str(u), str(lst), int(rank), str(t), None if pd.isna(i) else str(i),
+             None if pd.isna(score) else float(score), None if pd.isna(sim) else float(sim),
+             None if pd.isna(because) else str(because), model)
+            for u, lst, rank, t, i, score, sim, because in zip(
+                picks["user_id"], picks["list"], picks["rank"], picks["t_const"], item_ids,
+                picks["score"], picks["similarity"], picks["because_you_watched"])
+        ]
+        try:
+            with self._connection:
+                self._connection.executemany(f"INSERT OR REPLACE INTO recommendation_log VALUES ({','.join('?' * 10)})", rows)
+        except sqlite3.Error as e:
+            print(f"[SQLiteConnector] ERROR: Failed to store recommendations: {e}", file=sys.stderr)
+            return -1
+        return len(rows)
+
+    def get_recommendation_log(self) -> pd.DataFrame:
+        """Returns `recommendation_log` as a pandas DataFrame (empty if nothing logged yet)"""
+        if self._connection is None or not self._ensure_recommendation_log_schema():
+            return pd.DataFrame()
+        return pd.read_sql_query("SELECT * FROM recommendation_log", self._connection)
+
+
     # ====================================================================== User aliases ======================================================================
 
     def _ensure_user_aliases_schema(self) -> bool:
@@ -1623,6 +1690,6 @@ class SQLiteConnector:
             print("[SQLiteConnector] ERROR: DB not connected", file=sys.stderr)
             exit(1)
         return pd.read_sql_query(
-            "SELECT item_id, item_name, item_type, series_id, series_name, production_year, runtime_seconds, date_created, removed_at FROM library_items",
+            "SELECT item_id, item_name, item_type, series_id, series_name, season_number, episode_number, production_year, runtime_seconds, date_created, removed_at FROM library_items",
             self._connection,
         )

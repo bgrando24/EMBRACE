@@ -277,7 +277,7 @@ Demo: `PYTHONPATH=src python src/ml/main.py [IMDB ID ...]` - title-based recomme
 
 ## **Class:** Requests
 
-Jellyseerr requests as a ranking signal, built from `PreProcess.get_user_requests()`. `boost(when, user_id, own=0.1, others=0)` gives +`own` to titles that user requested before `when`. `src/ml/main.py` adds it to the freshness boost for "fresh for you", and marks those rows `you_requested`.
+Jellyseerr requests as a ranking signal, built from `PreProcess.get_user_requests()`. `boost(when, user_id, own=0.1, others=0)` gives +`own` to titles that user requested before `when`. `Recommender.picks()` adds it to the freshness boost for the fresh list, and marks those rows `you_requested`.
 
 Evaluated on 195 requests (Dec 2025 - Oct 2026, 5 requesters):
 - **What it measures:** 25 of the 133 time-aware test titles had been requested by that person beforehand. They already ranked well thanks to freshness (median rank 4), and the boost puts them first (median rank 1).
@@ -285,3 +285,29 @@ Evaluated on 195 requests (Dec 2025 - Oct 2026, 5 requesters):
 - **Other people's requests:** boosting these made results worse, so `others` is 0.
 - **Not used in profiles:** only about 1 in 4 requests is watched by its requester. Adding requested titles to profiles (`PreProcess.get_requested_titles()`) lowered both evaluations at every weight tried (0.25-1.0).
 - **Never excluded:** requested titles are never removed from recommendations, since "the thing you asked for has arrived" is a fair recommendation.
+
+## Daily picks: `Recommender` (`ml.picks`)
+
+`Recommender.load(pp)` builds the default model once: ContentKNN with MovieLens when it's downloaded, falling back to GenreKNN without TMDB details. It also builds the user profiles (including Emby played flags), the library, `Freshness` and `Requests`. `src/ml/main.py` and the nightly picks job both use it.
+
+`picks(user_id, n=10, when=None)` returns two lists, and a title is never in both:
+- **`fresh`:** taste + the freshness boost + the user's own requests. What people watch next is mostly what just arrived (see [time-aware evaluation](#time-aware-next_watch)).
+- **`back_catalogue`:** taste alone, leaving out the fresh list. This surfaces older titles that Emby's own "Latest" row won't.
+
+Columns: `list`, `rank`, `t_const`, `primary_name`, `start_year`, `type`, `similarity`, `score`, `because_you_watched`, `shared`, `added_days_ago`, `you_requested`.
+
+`all_picks()` runs `picks()` for every user with at least `MIN_PROFILE_TITLES` (5) titles in their profile, because a handful of titles is noise rather than taste.
+
+### Nightly playlists: `scripts/picks/daily_picks.py`
+
+Runs after the refresh (see [Scheduled Jobs](../workflows/cron_jobs.md)):
+- **Emby playlists:** each eligible user gets two private playlists, "Fresh for you" and "From the back catalogue", updated in place. Emby only lists a playlist to its owner.
+- **Shows:** adding a series to an Emby playlist adds every episode, so a show is represented by its first episode (`PreProcess.get_playlist_items()`).
+- **Discord preview:** a summary of everyone's top 3 per list goes to `DISCORD_WEBHOOK_URL`.
+- **Log:** every pick is appended to [`recommendation_log`](../databases/sqlite.md#recommendation-log), so later watch history can show which picks were actually watched.
+- **Opt-out:** users named in `EMBRACE_PICKS_EXCLUDE_USERS` get no playlists, and their picks are left out of the preview.
+
+```sh
+PYTHONPATH=src python scripts/picks/daily_picks.py --dry-run     # print everyone's picks, change nothing
+PYTHONPATH=src python scripts/picks/daily_picks.py --users NAME  # one user only
+```

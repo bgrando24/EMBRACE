@@ -120,6 +120,56 @@ class PreProcess:
         return set(prov.loc[(prov["provider"] == "imdb") & prov["item_id"].isin(current), "provider_item_id"])
 
 
+    def get_title_content(self, imdb_titles: pd.DataFrame | None = None) -> pd.DataFrame:
+        """
+        One row per IMDB title with fetched TMDB details (see `SQLiteConnector.ingest_tmdb_title_details`), for
+        `ContentKNN`.
+
+        Args:
+            imdb_titles (DataFrame, optional): output of `imdb_get_encoded_genres()`. Supplies IMDB names, types, years,
+                ratings, vote counts (the tie-break) and genres; without it, or for titles it doesn't have, TMDB's are
+                used and num_votes is missing.
+
+        Returns:
+            DataFrame: t_const, primary_name, type, start_year, avg_rating, num_votes, genres, keywords, collection,
+                       original_language, people, overview, media_type, tmdb_id
+        """
+        d = self.sqlite.get_tmdb_title_details()
+        if d.empty:
+            raise ValueError("No TMDB title details yet - run the refresh (or SQLiteConnector.ingest_tmdb_title_details)")
+        # Emby's IMDB ID is what watch history is linked through, so it wins over TMDB's
+        d["t_const"] = d["emby_imdb_id"].fillna(d["imdb_id"])
+        d = d[d["t_const"].notna()].sort_values(["t_const", "media_type", "tmdb_id"]).drop_duplicates("t_const")
+
+        out = pd.DataFrame({
+            "t_const": d["t_const"],
+            "primary_name": d["title"],
+            "type": d["media_type"].map({"movie": "movie", "tv": "tvSeries"}),
+            "start_year": pd.NA,
+            "avg_rating": pd.NA,
+            "num_votes": pd.NA,
+            "genres": d["genres"],
+        }).set_index("t_const")
+        if imdb_titles is not None:
+            imdb = imdb_titles.set_index("t_const")
+            imdb = imdb.loc[imdb.index.intersection(out.index)]
+            genre_cols = [c for c in imdb.columns if c.startswith("genre_")]
+            for col in ["primary_name", "type", "start_year", "avg_rating", "num_votes"]:
+                out.loc[imdb.index, col] = imdb[col]
+            out.loc[imdb.index, "genres"] = pd.Series(
+                [[c.removeprefix("genre_") for c in genre_cols if row[c]] for _, row in imdb[genre_cols].iterrows()],
+                index=imdb.index, dtype=object,
+            )
+
+        out = out.reset_index()
+        d = d.set_index("t_const").loc[out["t_const"]].reset_index()
+        for col in ["keywords", "collection", "original_language", "people", "overview", "media_type", "tmdb_id"]:
+            out[col] = d[col].to_numpy()
+        out["num_votes"] = pd.to_numeric(out["num_votes"]).astype("Int64")
+        out["avg_rating"] = pd.to_numeric(out["avg_rating"]).astype("Float64")
+        return out
+
+
     def map_emby_items_to_imdb(self, use_imdb_episodes: bool = True) -> pd.DataFrame:
         """
         Maps every watched or library Emby item to the IMDB title it should be recommended/learned as.

@@ -88,6 +88,15 @@ try:
     if not sqlite.ingest_all_library_items(Emby.iter_all_items(), Emby.get_item_metadata):
         fail("library ingest")
 
+    # content metadata for recommendations (keywords, cast/crew, descriptions): incremental and optional
+    try:
+        tmdb_details = sqlite.ingest_tmdb_title_details(TMDB.fetch_title_details, TMDB.find_by_imdb_id)
+        if tmdb_details < 0:
+            print("[WARN] TMDB title details fetch failed, continuing with existing details", file=sys.stderr)
+    except Exception as e:
+        tmdb_details = -1
+        print(f"[WARN] TMDB title details fetch failed ({e}), continuing with existing details", file=sys.stderr)
+
     new_events = sqlite.ingest_watch_hist_raw_events(Emby.get_all_watch_hist)
     if new_events < 0:
         fail("watch history ingest")
@@ -116,6 +125,7 @@ finished_at = datetime.now(tz=tz).strftime("%Y-%m-%d %H:%M:%S %Z")
 Notifications().discord_send_webhook(
     f"Cron job: Emby watch history refresh finished at {finished_at}\n"
     f"New watch events: {new_events}\n"
+    f"TMDB title details fetched: {tmdb_details if tmdb_details >= 0 else 'FAILED'}\n"
     f"Backup: {backup_path.name if backup_path.exists() else 'none (new database)'}"
     )
 

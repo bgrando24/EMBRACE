@@ -54,6 +54,19 @@ sqlite.ingest_all_library_items(
 
 Run this step whenever your Emby library changes materially (new imports, deletions, metadata edits).
 
+### 2b. Fetch TMDB title details (optional, for content-based recommendations)
+
+```python
+sqlite.ingest_tmdb_title_details(tmdb.fetch_title_details, tmdb.find_by_imdb_id)
+```
+
+Needs step 2 first, because it uses the TMDB provider IDs ingested there:
+- Fetches keywords, cast/crew and descriptions for library movies and series that have none yet, or whose details are older than 90 days.
+- Shows only known through their episodes are found with TMDB's `/find`.
+- Returns the number fetched, or -1 if every fetch failed.
+
+See [SQLite: TMDB title details](../databases/sqlite.md#tmdb-title-details).
+
 ## 3. Import raw watch history
 
 ```python

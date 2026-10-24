@@ -259,8 +259,8 @@ class PreProcess:
         """
         Jellyseerr requests linked to watch-history users and IMDB titles.
 
-        Requesters are matched by their linked Emby user ID, else by name (case-insensitive) against Emby user names,
-        then resolved through `user_aliases`. Titles are matched through TMDB details (so only titles that reached the
+        Requesters are matched by their linked Emby user ID, else by name (case-insensitive) against watch-history
+        user names, then resolved through `user_aliases`. Titles are matched through TMDB details (so only titles that reached the
         library, or were looked up, resolve).
 
         Returns:
@@ -273,9 +273,8 @@ class PreProcess:
                                          "media_status", "requested_at"])
         users = self.sqlite.get_watch_hist_users()
         by_name = users.assign(key=users["user_name"].str.casefold()).drop_duplicates("key").set_index("key")["user_id"]
-        known_ids = set(users["user_id"])
-        user_id = req["requester_emby_id"].where(req["requester_emby_id"].isin(known_ids))
-        user_id = user_id.fillna(req["requester_name"].str.casefold().map(by_name))
+        # the linked Emby user ID even without watch history yet (they may get one), else the name
+        user_id = req["requester_emby_id"].fillna(req["requester_name"].str.casefold().map(by_name))
         aliases = self.sqlite.get_user_aliases().set_index("alias_user_id")["user_id"]
         req["user_id"] = user_id.map(aliases).fillna(user_id)
 
@@ -288,6 +287,40 @@ class PreProcess:
             req["t_const"] = None
         req["requested_at"] = pd.to_datetime(req["requested_at"], utc=True, errors="coerce").dt.tz_localize(None)
         return req[["user_id", "requester_name", "t_const", "media_type", "tmdb_id", "status", "media_status", "requested_at"]]
+
+
+    # interest a request counts for in a profile, when the requester hasn't watched the title (yet). Not used by
+    # default: adding requests to profiles lowered both evaluations at 0.25-1.0 (see `ml.requests_signal.Requests`)
+    REQUEST_INTEREST = 0.25
+
+    def get_requested_titles(self, user_titles: pd.DataFrame, interest: float = REQUEST_INTEREST) -> pd.DataFrame:
+        """
+        Titles a user requested in Jellyseerr but hasn't watched, as rows like `get_user_title_stats()[0]` with
+        `source` = "jellyseerr_request", sized so `title_interest()` gives `interest` (for a movie: that fraction of
+        it watched; for a series the equivalent hours). Only titles with TMDB details (i.e. that reached the library).
+        """
+        req = self.get_user_requests().dropna(subset=["user_id", "t_const"])
+        seen = set(zip(user_titles["user_id"], user_titles["imdb_id"]))
+        req = req[[(u, t) not in seen for u, t in zip(req["user_id"], req["t_const"])]]
+        req = req.sort_values("requested_at").drop_duplicates(["user_id", "t_const"])
+        names = self.sqlite.get_watch_hist_users().set_index("user_id")["user_name"]
+        titles = self.sqlite.get_tmdb_title_details()
+        title_names = titles.assign(t=titles["emby_imdb_id"].fillna(titles["imdb_id"])).drop_duplicates("t").set_index("t")["title"]
+        is_movie = req["media_type"] == "movie"
+        # movie: interest = watched / runtime with a nominal 2h runtime; series: log2(1 + h / 2) = interest
+        hours = np.where(is_movie, 2 * interest, 2 * (2 ** interest - 1))
+        return pd.DataFrame({
+            "user_id": req["user_id"].to_numpy(),
+            "user_name": req["user_id"].map(names).fillna(req["requester_name"]).to_numpy(),
+            "imdb_id": req["t_const"].to_numpy(),
+            "unit_name": req["t_const"].map(title_names).to_numpy(),
+            "unit_type": np.where(is_movie, "Movie", "Series"),
+            "items_watched": 0,
+            "total_seconds_watched": hours * 3600,
+            "runtime_seconds": np.where(is_movie, 2 * 3600, np.nan),
+            "requested_at": req["requested_at"].to_numpy(),
+            "source": "jellyseerr_request",
+        })
 
 
     def get_title_additions(self) -> pd.DataFrame:

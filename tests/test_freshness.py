@@ -86,7 +86,7 @@ class TestNextWatch(unittest.TestCase):
         self.assertEqual(res.loc["tt4", ["rank", "n_ranked"]].tolist(), [1, 4])
 
     def test_profile_ranker_runs_time_aware(self):
-        boosted = profile_ranker(self.knn, lambda when: self.f.boost(when))
+        boosted = profile_ranker(self.knn, lambda when, user_id: self.f.boost(when))
         res = next_watch(boosted, self.history(), self.scope, self.f).set_index("imdb_id")
         self.assertEqual(res.loc["tt4", "rank"], 1)
 

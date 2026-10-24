@@ -248,7 +248,8 @@ Results, Oct 2026 (133 held out; fewer than above, since first watches and title
 | `GenreKNN` | 0.045 | 0.018 | 0.505 |
 | `ContentKNN` | 0.083 | 0.033 | 0.595 |
 | Newest first (ignores taste) | 0.376 | 0.172 | 0.760 |
-| **`ContentKNN` + freshness boost (0.3, 30 days)** | **0.376** | **0.202** | **0.822** |
+| `ContentKNN` + freshness boost (0.3, 30 days) | 0.376 | 0.202 | 0.822 |
+| **+ the user's own Jellyseerr requests (+0.1)** | **0.376** | **0.238** | **0.832** |
 
 (Emby played flags have no dates, so they can't take part in this replay.)
 
@@ -271,7 +272,16 @@ Demo: `PYTHONPATH=src python src/ml/main.py [IMDB ID ...]` - title-based recomme
 | TMDB API | Keywords, cast/crew, descriptions, franchises, TMDB recommendations | `TMDB_READ_ACCESS_TOKEN`; fetched by the refresh | [TMDB API terms](https://www.themoviedb.org/api-terms-of-use): free, attribution required |
 | Emby | Played flags and favourites (`user_item_states`), date added | none; fetched by the refresh | your server |
 | MovieLens 32M | Collaborative "liked by the same people" signal for movies | `scripts/movielens/download_movielens.sh` (240 MB download, ~1 GB unpacked, in `data/movielens/`, gitignored); cached on first use in `data/cache/movielens_likers.parquet` | GroupLens: research / non-commercial use only, no endorsement implied; cite F. Maxwell Harper and Joseph A. Konstan, 2015, *The MovieLens Datasets: History and Context*, ACM TiiS 5(4) |
-| Jellyseerr | Who requested what, and when (`jellyseerr_requests`, `PreProcess.get_user_requests()`) | `JELLYSEERR_URL` + `JELLYSEERR_API_KEY` in `.env`; fetched by the refresh once set | your server |
+| Jellyseerr | Who requested what, and when (`jellyseerr_requests`, `PreProcess.get_user_requests()`, `Requests`) | `JELLYSEERR_URL` + `JELLYSEERR_API_KEY` in `.env`; fetched by the refresh once set | your server |
 | IMDB datasets | Genres, ratings, vote counts, episode -> series | see [MySQL](../databases/mysql.md) | IMDB non-commercial licence |
 
-Jellyseerr requests are stored, but not yet used by the models. They're waiting on real data to evaluate.
+## **Class:** Requests
+
+Jellyseerr requests as a ranking signal, built from `PreProcess.get_user_requests()`. `boost(when, user_id, own=0.1, others=0)` gives +`own` to titles that user requested before `when`. `src/ml/main.py` adds it to the freshness boost for "fresh for you", and marks those rows `you_requested`.
+
+Evaluated on 195 requests (Dec 2025 - Oct 2026, 5 requesters):
+- **What it measures:** 25 of the 133 time-aware test titles had been requested by that person beforehand. They already ranked well thanks to freshness (median rank 4), and the boost puts them first (median rank 1).
+- **Result:** MRR 0.202 -> 0.238 and AUC 0.822 -> 0.832, with no change to the rest. Results plateau from 0.05 to 0.15.
+- **Other people's requests:** boosting these made results worse, so `others` is 0.
+- **Not used in profiles:** only about 1 in 4 requests is watched by its requester. Adding requested titles to profiles (`PreProcess.get_requested_titles()`) lowered both evaluations at every weight tried (0.25-1.0).
+- **Never excluded:** requested titles are never removed from recommendations, since "the thing you asked for has arrived" is a fair recommendation.

@@ -32,6 +32,7 @@ import pandas as pd
 from .content_knn import ContentKNN
 from .cosine_knn import CosineKNN
 from .freshness import Freshness
+from .requests_signal import Requests
 from .genre_knn import GenreKNN
 from .preprocess import PreProcess
 from .user_profiles import MIN_INTEREST, title_interest
@@ -39,23 +40,25 @@ from .user_profiles import MIN_INTEREST, title_interest
 # only hold out titles the user clearly liked: 80%+ of a movie (credits are often skipped), or ~1.5+ hours of a series
 MIN_HELDOUT_INTEREST = 0.8
 
-# (profile t_consts, profile weights, t_consts to exclude, candidate t_consts, as-of time) -> candidates, best first
-Ranker = Callable[[list[str], list[float], set[str], list[str], Optional[pd.Timestamp]], list[str]]
+# (profile t_consts, profile weights, t_consts to exclude, candidate t_consts, as-of time, user ID) -> candidates, best first
+Ranker = Callable[[list[str], list[float], set[str], list[str], Optional[pd.Timestamp], str], list[str]]
+# (as-of time, user ID) -> t_const -> amount added to the similarity
+Boost = Callable[[Optional[pd.Timestamp], str], pd.Series]
 
 
-def profile_ranker(model: CosineKNN, boost: Optional[Callable[[Optional[pd.Timestamp]], pd.Series]] = None) -> Ranker:
+def profile_ranker(model: CosineKNN, boost: Optional[Boost] = None) -> Ranker:
     """
     Ranks candidates by similarity to the interest-weighted profile, like `UserProfiles.recommend()`.
-    `boost(when)` (optional) returns t_const -> amount added to the similarity, e.g. `Freshness.boost`.
+    `boost(when, user_id)` (optional) returns t_const -> amount added to the similarity, e.g. freshness and requests.
     """
-    def rank(t_consts, weights, exclude, candidates, when=None):
+    def rank(t_consts, weights, exclude, candidates, when=None, user_id=None):
         try:
             profile = model.profile_vector(t_consts, weights)
         except ValueError:      # none of the profile titles are in the model
             ranked = []
         else:
             ranked = model.recommend_for_profile(
-                profile, n=len(candidates), allowed=candidates, exclude=exclude, boost=boost(when) if boost else None
+                profile, n=len(candidates), allowed=candidates, exclude=exclude, boost=boost(when, user_id) if boost else None
             )["t_const"].tolist()
         # candidates the model can't score (e.g. series in a MovieLens-only model) go last
         seen = set(ranked)
@@ -67,7 +70,7 @@ def popularity_ranker(num_votes: pd.Series) -> Ranker:
     """Ignores the profile: most IMDB votes first (the same tie-break the models use)"""
     votes = num_votes.fillna(0).astype(float)
 
-    def rank(t_consts, weights, exclude, candidates, when=None):
+    def rank(t_consts, weights, exclude, candidates, when=None, user_id=None):
         c = votes.reindex([t for t in candidates if t not in exclude]).fillna(0).rename("votes").rename_axis("t_const").reset_index()
         return c.sort_values(["votes", "t_const"], ascending=[False, True])["t_const"].tolist()
     return rank
@@ -75,7 +78,7 @@ def popularity_ranker(num_votes: pd.Series) -> Ranker:
 
 def freshness_ranker(freshness: Freshness) -> Ranker:
     """Ignores the profile: most recently added (or given new episodes) first, as of `when`"""
-    def rank(t_consts, weights, exclude, candidates, when=None):
+    def rank(t_consts, weights, exclude, candidates, when=None, user_id=None):
         age = freshness.at(when)["age_days"]
         c = pd.DataFrame({"t_const": [t for t in candidates if t not in exclude]})
         c["age"] = c["t_const"].map(age).fillna(np.inf)
@@ -104,7 +107,7 @@ def leave_one_out(
     rows = []
     for (user_id, user_name), u in h.groupby(["user_id", "user_name"], dropna=False):
         profile = u[u["imdb_id"].isin(in_scope) & (u["interest"] >= MIN_INTEREST)]
-        watched = set(u["imdb_id"])
+        watched = set(u.loc[_seen(u), "imdb_id"])
         # only watch-history titles are held out, so extra profile sources (e.g. Emby played flags) can be compared
         # on the same held-out set
         holdable = profile["source"].isna() if "source" in profile else pd.Series(True, index=profile.index)
@@ -113,7 +116,7 @@ def leave_one_out(
             if rest.empty:
                 continue
             exclude = watched - {held["imdb_id"]}
-            ranking = ranker(rest["imdb_id"].tolist(), rest["interest"].tolist(), exclude, sorted(candidates), None)
+            ranking = ranker(rest["imdb_id"].tolist(), rest["interest"].tolist(), exclude, sorted(candidates), None, user_id)
             rows.append({
                 "user_name": user_name, "imdb_id": held["imdb_id"], "unit_name": held["unit_name"],
                 "interest": held["interest"], "rank": ranking.index(held["imdb_id"]) + 1, "n_ranked": len(ranking),
@@ -144,26 +147,39 @@ def next_watch(
         interest=title_interest(user_titles),
         first_watched=pd.to_datetime(user_titles["first_watched_timestamp"], errors="coerce"),
     )
+    # rows from other sources join the profile from when they happened (e.g. a Jellyseerr request), else never
+    known_at = h["first_watched"]
+    if "requested_at" in h:
+        known_at = known_at.fillna(pd.to_datetime(h["requested_at"], errors="coerce"))
+    h["known_at"] = known_at
     rows = []
     for (user_id, user_name), u in h.groupby(["user_id", "user_name"], dropna=False):
         pool = u[u["imdb_id"].isin(in_scope) & (u["interest"] >= MIN_INTEREST)]
-        for _, held in pool[pool["interest"] >= min_heldout_interest].iterrows():
+        holdable = pool["source"].isna() if "source" in pool else pd.Series(True, index=pool.index)
+        for _, held in pool[holdable & (pool["interest"] >= min_heldout_interest)].iterrows():
             when = held["first_watched"]
             if pd.isna(when):
                 continue
-            earlier = pool[pool["first_watched"] < when]
+            earlier = pool[(pool["known_at"] < when) & (pool["imdb_id"] != held["imdb_id"])]
             available = set(freshness.at(when).index) & in_scope
             if earlier.empty or held["imdb_id"] not in available:
                 continue
-            exclude = set(u.loc[u["first_watched"] < when, "imdb_id"])
+            exclude = set(u.loc[_seen(u) & (u["first_watched"] < when), "imdb_id"])
             candidates = sorted(available - exclude)
-            ranking = ranker(earlier["imdb_id"].tolist(), earlier["interest"].tolist(), exclude, candidates, when)
+            ranking = ranker(earlier["imdb_id"].tolist(), earlier["interest"].tolist(), exclude, candidates, when, user_id)
             rows.append({
                 "user_name": user_name, "imdb_id": held["imdb_id"], "unit_name": held["unit_name"],
                 "interest": held["interest"], "watched_at": when,
                 "rank": ranking.index(held["imdb_id"]) + 1, "n_ranked": len(ranking),
             })
     return pd.DataFrame(rows)
+
+
+def _seen(user_rows: pd.DataFrame) -> pd.Series:
+    """Rows meaning the user has seen the title (so it's never recommended): all but Jellyseerr requests"""
+    if "source" not in user_rows:
+        return pd.Series(True, index=user_rows.index)
+    return user_rows["source"].ne("jellyseerr_request")
 
 
 def summarise(results: pd.DataFrame, k: int = 10) -> dict[str, float]:
@@ -258,8 +274,12 @@ def main():
         for weight in (0.1, Freshness.DEFAULT_WEIGHT, 1.0):
             for half_life in (14, Freshness.DEFAULT_HALF_LIFE_DAYS, 60):
                 temporal[f"content + fresh {weight} / {half_life}d"] = profile_ranker(
-                    content_knn, lambda when, w=weight, hl=half_life: freshness.boost(when, w, hl)
+                    content_knn, lambda when, user_id, w=weight, hl=half_life: freshness.boost(when, w, hl)
                 )
+        requests = Requests(pp.get_user_requests())
+        temporal["content + fresh + own requests (defaults)"] = profile_ranker(
+            content_knn, lambda when, user_id: freshness.boost(when).add(requests.boost(when, user_id), fill_value=0)
+        )
         rows = {name: summarise(next_watch(r, user_titles, scope, freshness)) for name, r in temporal.items()}
         print(pd.DataFrame(rows).T.round(3).to_string())
 

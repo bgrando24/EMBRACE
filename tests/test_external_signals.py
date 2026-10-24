@@ -259,3 +259,92 @@ class TestJellyseerr(TempDBTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRequestSignals(unittest.TestCase):
+
+    def requests(self):
+        return pd.DataFrame([
+            {"user_id": "u1", "t_const": "tt2", "requested_at": pd.Timestamp("2026-01-10")},
+            {"user_id": "u2", "t_const": "tt5", "requested_at": pd.Timestamp("2026-01-10")},
+            {"user_id": "u1", "t_const": "tt4", "requested_at": pd.Timestamp("2026-03-01")},
+            {"user_id": "u1", "t_const": None, "requested_at": pd.Timestamp("2026-01-01")},     # never reached the library
+        ])
+
+    def test_boost_own_requests_made_before_then(self):
+        from ml import Requests
+        r = Requests(self.requests())
+        self.assertEqual(r.boost("2026-02-01", "u1", own=0.1).to_dict(), {"tt2": 0.1})
+        self.assertEqual(r.boost("2026-02-01", "u1", own=0.1, others=0.05).to_dict(), {"tt2": 0.1, "tt5": 0.05})
+        self.assertEqual(set(r.boost(None, "u1").index), {"tt2", "tt4"})
+        self.assertTrue(r.boost(None, "nobody").empty)
+
+    def rows(self):
+        def row(t, first, source=None, requested=None):
+            return {"user_id": "u1", "user_name": "u1", "imdb_id": t, "unit_name": t, "unit_type": "Movie",
+                    "items_watched": 1, "total_seconds_watched": 7200, "runtime_seconds": 7200,
+                    "first_watched_timestamp": first, "source": source, "requested_at": requested}
+        return pd.DataFrame([
+            row("tt1", "2026-01-05 20:00:00"),
+            row("tt3", "2026-02-02 20:00:00"),
+            # requested, not watched: joins the profile from when it was requested, never excluded
+            row("tt4", None, "jellyseerr_request", pd.Timestamp("2026-01-20")),
+        ])
+
+    def test_requests_are_not_seen_and_join_profiles_from_their_date(self):
+        from test_freshness import ADDITIONS
+        from ml import Freshness
+        from ml.evaluate import next_watch
+        f = Freshness(ADDITIONS)
+        scope = set(CONTENT["t_const"])
+        calls = []
+
+        def ranker(t_consts, weights, exclude, candidates, when, user_id):
+            calls.append((sorted(t_consts), exclude, set(candidates), user_id))
+            return sorted(candidates)
+        next_watch(ranker, self.rows(), scope, f)
+        (profile, exclude, candidates, user_id), = calls           # only tt3 can be held out (tt1 is the first watch)
+        self.assertEqual(profile, ["tt1", "tt4"])
+        self.assertEqual(exclude, {"tt1"})
+        self.assertIn("tt4", candidates)
+        self.assertEqual(user_id, "u1")
+
+    def test_user_profiles_still_recommend_requested_titles(self):
+        from ml import UserProfiles
+        rows = self.rows().drop(columns=["first_watched_timestamp", "requested_at"])
+        recs = UserProfiles(ContentKNN(CONTENT), rows).recommend("u1", n=10)
+        self.assertIn("tt4", set(recs["t_const"]))
+        self.assertTrue({"tt1", "tt3"}.isdisjoint(recs["t_const"]))
+
+
+class TestRequestedTitles(TempDBTestCase):
+
+    def test_requested_unwatched_titles_become_profile_rows(self):
+        from ml import title_interest
+        self.db.ingest_all_library_items(iter([
+            item("m1", "Movie", "M", imdb="tt1", tmdb="10"), item("s1", "Series", "S", imdb="tt2", tmdb="20"),
+        ]))
+        self.db.ingest_tmdb_title_details(FakeTMDB().fetch)
+        self.db.ingest_watch_hist_raw_events(lambda d, a: {"u": [{
+            "date": "2026-09-01", "time": "20:00:00", "user_id": "u1", "item_name": "M", "item_id": "m1",
+            "item_type": "Movie", "duration": "100", "remote_address": "", "user_name": "one", "user_has_image": False,
+        }]})
+        self.db._INIT_POPULATE_watch_hist_agg_sessions()
+        self.db._INIT_POPULATE_watch_hist_user_item_stats()
+        j = JellyseerrConnector("http://seerr", "key")
+        j._session = mock.Mock()
+        j._session.get.return_value = response(200, {"pageInfo": {"results": 2}, "results": [
+            jellyseerr_request(1, 10, user={"jellyfinUserId": "u1"}),           # already watched -> not a request row
+            jellyseerr_request(2, 20, "tv", user={"jellyfinUserId": "u1"}),
+        ]})
+        self.db.ingest_jellyseerr_requests(j.iter_requests)
+        pp = PreProcess("test.db")
+        pp._mysql_error = ConnectionError("no MySQL in tests")
+        try:
+            titles, _ = pp.get_user_title_stats()
+            req = pp.get_requested_titles(titles, interest=0.5)
+        finally:
+            pp.sqlite._connection.close()
+        self.assertEqual(req[["user_id", "imdb_id", "unit_type", "unit_name", "source"]].values.tolist(),
+                         [["u1", "tt2", "Series", "Title 20", "jellyseerr_request"]])
+        self.assertAlmostEqual(title_interest(req).iloc[0], 0.5)

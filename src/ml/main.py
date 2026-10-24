@@ -1,6 +1,6 @@
 import sys
 import pandas as pd
-from ml import PreProcess, GenreKNN, ContentKNN, Freshness, UserProfiles
+from ml import PreProcess, GenreKNN, ContentKNN, Freshness, Requests, UserProfiles
 
 # usage (from project root): PYTHONPATH=src python src/ml/main.py [IMDB ID ...]
 # e.g. PYTHONPATH=src python src/ml/main.py tt3890160     (Baby Driver)
@@ -49,6 +49,7 @@ user_titles = pd.concat([user_titles, pp.get_played_titles(user_titles)], ignore
 profiles = UserProfiles(knn, user_titles)
 freshness = Freshness(pp.get_title_additions())
 fresh = freshness.boost() if len(freshness.at()) else None    # no dates until the refresh stores DateCreated
+requests = Requests(pp.get_user_requests())                   # empty without Jellyseerr configured
 print("\n=== Users")
 print(profiles.users().drop(columns="user_id").round(1).to_string(index=False))
 for user_id, user_name in profiles.users()[["user_id", "user_name"]].itertuples(index=False):
@@ -56,9 +57,11 @@ for user_id, user_name in profiles.users()[["user_id", "user_name"]].itertuples(
     print(f"\n=== {user_name} - " + ", ".join(f"{g} {s:.0%}" for g, s in shares.items()))
     cols = ["primary_name", "start_year", "similarity", "because_you_watched", "shared"]
     if fresh is not None:
-        recs = profiles.recommend(user_id, n=5, allowed=library, boost=fresh)
+        mine = requests.boost(user_id=user_id)
+        recs = profiles.recommend(user_id, n=5, allowed=library, boost=fresh.add(mine, fill_value=0))
         recs["added_days_ago"] = recs["t_const"].map(freshness.at()["age_days"]).round(0)
+        recs["you_requested"] = recs["t_const"].isin(mine.index)
         print("-- fresh for you:")
-        print(recs[cols[:3] + ["added_days_ago"] + cols[3:]].to_string(index=False))
+        print(recs[cols[:3] + ["added_days_ago", "you_requested"] + cols[3:]].to_string(index=False))
     print("-- from the back catalogue:" if fresh is not None else "-- recommendations:")
     print(profiles.recommend(user_id, n=10, allowed=library)[cols].to_string(index=False))

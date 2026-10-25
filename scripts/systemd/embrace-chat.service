@@ -1,0 +1,19 @@
+# EMBRACE's Discord chat-bot (see docs/modules/chat.md). Always on and light: the LLM it talks to runs on another
+# machine, only when started (scripts/llm/llm.sh). Picks up the nightly refresh's data on the next message after it.
+# Install: copy to ~/.config/systemd/user/, then `systemctl --user enable --now embrace-chat.service`.
+[Unit]
+Description=EMBRACE: Discord chat-bot
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/src/EMBRACE
+Environment=PYTHONPATH=%h/src/EMBRACE/src
+ExecStart=%h/src/EMBRACE/venv/bin/python scripts/chat/discord_bot.py
+Restart=on-failure
+RestartSec=30
+Nice=5
+
+[Install]
+WantedBy=default.target

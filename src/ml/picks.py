@@ -34,6 +34,8 @@ class Recommender:
     library: set[str]
     freshness: Freshness
     requests: Requests
+    # `PreProcess.get_title_content()` rows (overviews, keywords, people) - None when the genre model was used
+    content: Optional[pd.DataFrame] = None
 
     @classmethod
     def load(cls, pp: PreProcess, log: Callable[[str], None] = print) -> "Recommender":
@@ -47,8 +49,10 @@ class Recommender:
         except FileNotFoundError:
             log("MovieLens not downloaded (scripts/movielens/download_movielens.sh), its block stays empty")
             movielens = None
+        content = None
         try:
-            knn: CosineKNN = ContentKNN(pp.get_title_content(titles, movielens))
+            content = pp.get_title_content(titles, movielens)
+            knn: CosineKNN = ContentKNN(content)
         except ValueError as e:
             log(f"Content model unavailable ({e}), using the genre model")
             knn = GenreKNN(titles)
@@ -60,6 +64,7 @@ class Recommender:
             library=pp.get_library_imdb_ids(),
             freshness=Freshness(pp.get_title_additions()),
             requests=Requests(pp.get_user_requests()),
+            content=content,
         )
 
     def eligible_users(self, min_titles: int = MIN_PROFILE_TITLES) -> pd.DataFrame:

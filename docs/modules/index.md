@@ -6,6 +6,7 @@ EMBRACE's source code is primarily separated into modules, which is simply just 
 | ---------- | -------------- | -------------------------------------------------------- |
 | Connectors | src/connectors | Wrappers for 3rd party services (e.g. Emby, databases)   |
 | ML         | src/ml         | Machine learning functionality, including pre-processing |
+| Chat       | src/chat       | The chat-bot: a local LLM with tools over the library    |
 | Utils      | src/utils      | Shared utility classes (e.g. Notifications)              |
 
 </br></br>

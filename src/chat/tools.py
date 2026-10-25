@@ -1,0 +1,355 @@
+import difflib
+import json
+import re
+from typing import Callable, Optional
+
+import numpy as np
+import pandas as pd
+import scipy.sparse as sp
+from sklearn.feature_extraction.text import TfidfVectorizer
+
+from ml import Recommender
+from ml.picks import BACK_CATALOGUE, FRESH
+
+# IMDB title types shown to the LLM as "show"; everything else (movie, tvMovie, ...) is a "movie"
+SHOW_TYPES = {"tvSeries", "tvMiniSeries"}
+# characters of the TMDB overview included in list results (title_info has all of it)
+ABOUT_CHARS = 220
+# how many keywords / cast members to show per title
+LIST_KEYWORDS = 6
+INFO_CAST = 6
+
+
+def _norm(name: str) -> str:
+    """Title as typed by people: case, punctuation and a leading article don't matter"""
+    s = re.sub(r"[^\w\s]", " ", str(name).casefold())
+    return re.sub(r"^(the|a|an)\s+", "", " ".join(s.split()))
+
+
+class LibraryTools:
+    """
+    What the chat-bot can look up, as tools for an LLM (see `chat.ChatSession`): searching the server's library by
+    description, similar titles, details of one title, and the user's own picks and watch history.
+
+    Everything is built once from a `Recommender` and shared by all users; each call says which user it's for. Results
+    are small JSON documents, since they go into the model's context.
+    """
+
+    def __init__(self, rec: Recommender, library: Optional[set[str]] = None):
+        """
+        Args:
+            rec (Recommender): needs `content` (TMDB details), i.e. the content model
+            library (set, optional): IMDB IDs on the server - DEFAULT: `rec.library`
+        """
+        if rec.content is None:
+            raise ValueError("The chat tools need TMDB title details (the content model)")
+        self.rec = rec
+        self.library = set(library if library is not None else rec.library)
+        c = rec.content.drop_duplicates("t_const").set_index("t_const")
+        self.titles = c.assign(
+            kind=np.where(c["type"].isin(SHOW_TYPES), "show", "movie"),
+            year=pd.to_numeric(c["start_year"], errors="coerce").astype("Int64"),
+            on_server=c.index.isin(self.library),
+            norm=c["primary_name"].map(_norm),
+        )
+        self._ids = self.titles.index.to_numpy()
+
+        # text search over everything said about a title; bigrams so "small town" or "serial killer" match as phrases
+        docs = [
+            " ".join([
+                str(r.primary_name), " ".join(r.genres or []), " ".join(r.keywords or []), " ".join(r.keywords or []),
+                " ".join(p["name"] for p in self._people(r.people, cast=5)), str(r.overview or ""),
+            ])
+            for r in self.titles.itertuples()
+        ]
+        self._vectorizer = TfidfVectorizer(stop_words="english", ngram_range=(1, 2), sublinear_tf=True)
+        self._X = sp.csr_matrix(self._vectorizer.fit_transform(docs))
+
+        self._tools: dict[str, tuple[Callable, dict]] = {
+            "search_library": (self.search_library, {
+                "description": "Find titles on the server matching a description: themes, setting, tone, plot "
+                               "elements, genre, actors or directors. Write the query as descriptive keywords, e.g. "
+                               "'small town canada comedy hockey' rather than a question. Whenever the user names a "
+                               "title they liked, also pass it as `like`: results then match both the description "
+                               "and that title.",
+                "properties": {
+                    "query": {"type": "string", "description": "descriptive keywords"},
+                    "like": {"type": "string", "description": "a title the user liked, to find titles similar to it"},
+                    "kind": {"type": "string", "enum": ["movie", "show", "any"], "description": "default any"},
+                    "include_watched": {"type": "boolean", "description": "default false"},
+                    "limit": {"type": "integer", "description": "default 6"},
+                },
+                "required": ["query"],
+            }),
+            "similar_titles": (self.similar_titles, {
+                "description": "Titles on the server most similar to a given title (by keywords, cast and crew, "
+                               "plot, genre, and what other viewers liked). The given title must be one the server "
+                               "has or had; for anything else use search_library with a description of it.",
+                "properties": {
+                    "title": {"type": "string", "description": "the title's name, optionally with its year"},
+                    "kind": {"type": "string", "enum": ["movie", "show", "any"], "description": "default any"},
+                    "include_watched": {"type": "boolean", "description": "default false"},
+                    "limit": {"type": "integer", "description": "default 6"},
+                },
+                "required": ["title"],
+            }),
+            "title_info": (self.title_info, {
+                "description": "Details of one title: plot, genres, keywords, cast and crew, whether it's on the "
+                               "server, and whether the user has watched it.",
+                "properties": {"title": {"type": "string", "description": "the title's name, optionally with its year"}},
+                "required": ["title"],
+            }),
+            "my_recommendations": (self.my_recommendations, {
+                "description": "The user's personal recommendations from their watch history: 'fresh' = new on the "
+                               "server, 'back_catalogue' = older titles. Use when they ask what to watch without "
+                               "saying what they're in the mood for.",
+                "properties": {
+                    "list": {"type": "string", "enum": [FRESH, BACK_CATALOGUE], "description": "default fresh"},
+                    "limit": {"type": "integer", "description": "default 6"},
+                },
+                "required": [],
+            }),
+            "my_watch_history": (self.my_watch_history, {
+                "description": "What the user has watched: the titles they watched most, or most recently.",
+                "properties": {
+                    "order": {"type": "string", "enum": ["most_watched", "recent"], "description": "default most_watched"},
+                    "limit": {"type": "integer", "description": "default 15"},
+                },
+                "required": [],
+            }),
+        }
+
+    # ---- for the LLM ----
+
+    def schemas(self) -> list[dict]:
+        """Tool definitions in Ollama's (OpenAI-style) format"""
+        return [
+            {"type": "function", "function": {
+                "name": name, "description": spec["description"],
+                "parameters": {"type": "object", "properties": spec["properties"], "required": spec["required"]},
+            }}
+            for name, (_, spec) in self._tools.items()
+        ]
+
+    def call(self, name: str, arguments: dict, user_id: Optional[str]) -> str:
+        """Runs a tool for a user; errors come back as a JSON `error` the model can read and recover from"""
+        if name not in self._tools:
+            return json.dumps({"error": f"unknown tool {name}"})
+        fn, spec = self._tools[name]
+        args = {k: v for k, v in (arguments or {}).items() if k in spec["properties"]}
+        try:
+            return json.dumps(fn(user_id=user_id, **args), ensure_ascii=False, default=str)
+        except Exception as e:      # incl. bad argument types: the model can retry, the conversation goes on
+            return json.dumps({"error": str(e) if isinstance(e, ValueError) else f"{type(e).__name__}: {e}"})
+
+    # ---- tools ----
+
+    def search_library(self, query: str = "", user_id: Optional[str] = None, like: Optional[str] = None,
+                       kind: str = "any", include_watched: bool = False, limit: int = 6) -> dict:
+        """
+        Text match to `query`; with `like`, the average of that and the similarity to the `like` title, each scaled
+        to its best match (so a small model gets both in one call, rather than having to merge two tool results)
+        """
+        mask = pd.Series(self._mask(user_id, kind, include_watched), index=self._ids)
+        q = self._vectorizer.transform([query or ""])
+        score = pd.Series(np.asarray((self._X @ q.T).todense()).ravel(), index=self._ids)[mask]
+        score = score / score.max() if score.max() > 0 else score
+        out, seed = {}, None
+        if like:
+            try:
+                seed, _ = self._resolve(like)
+            except ValueError as e:
+                out["like"] = str(e)
+        knn = self.rec.knn
+        if seed is not None and seed in knn:
+            candidates = [t for t in score.index if t in knn and t != seed]
+            similarity = pd.Series(knn.similarity_between([seed], candidates)[0], index=candidates)
+            similarity = similarity / similarity.max() if len(similarity) and similarity.max() > 0 else similarity
+            score = score.drop(seed, errors="ignore")
+            score = (score + similarity.reindex(score.index, fill_value=0)) / 2
+            out["like"] = self._name(seed)
+        top = score[score > 0].sort_values(ascending=False).head(self._limit(limit))
+        if top.empty:
+            return {**out, "results": [], "note": "nothing matched; try other words (synonyms, setting, genre)"}
+        taste = self._taste_fit(user_id)
+        results = [self._summary(t, user_id, taste) for t in top.index]
+        if seed is not None and seed in knn:
+            in_knn = [i for i, t in enumerate(top.index) if t in knn]
+            for i, shared in zip(in_knn, knn.shared_between(seed, top.index[in_knn])):
+                results[i]["in_common"] = shared[:5]
+        return {**out, "results": results}
+
+    def similar_titles(self, title: str, user_id: Optional[str] = None, kind: str = "any",
+                       include_watched: bool = False, limit: int = 6) -> dict:
+        t_const, others = self._resolve(title)
+        knn = self.rec.knn
+        if t_const not in knn:
+            return {"error": f"{self.titles.loc[t_const, 'primary_name']} has no features to compare"}
+        allowed = self.titles.index[self._mask(user_id, kind, include_watched)]
+        recs = knn.recommend(t_const, n=self._limit(limit), allowed=allowed)
+        taste = self._taste_fit(user_id)
+        results = [{**self._summary(t, user_id, taste), "in_common": shared[:5]}
+                   for t, shared in zip(recs["t_const"], recs[knn.SHARED_COL])]
+        return {"similar_to": self._name(t_const), **({"other_matches": others} if others else {}), "results": results}
+
+    def title_info(self, title: str, user_id: Optional[str] = None) -> dict:
+        t_const, others = self._resolve(title)
+        r = self.titles.loc[t_const]
+        people = self._people(r["people"], cast=INFO_CAST)
+        out = {
+            "title": self._name(t_const), "type": r["kind"], "on_server": bool(r["on_server"]),
+            "genres": list(r["genres"] or []), "keywords": list(r["keywords"] or [])[:15],
+            "crew": [f"{p['name']} ({p['role']})" for p in people if p["role"] != "cast"],
+            "cast": [p["name"] for p in people if p["role"] == "cast"],
+            "about": r["overview"],
+        }
+        if pd.notna(r["avg_rating"]):
+            out["imdb_rating"] = float(r["avg_rating"])
+        if user_id is not None:
+            out["you_watched"] = self._watched_note(user_id, t_const)
+            if (fit := self._taste_fit(user_id)) is not None and t_const in fit.index:
+                out["taste_fit"] = int(fit[t_const])
+        if others:
+            out["other_matches"] = others
+        return out
+
+    def my_recommendations(self, user_id: Optional[str] = None, list: str = FRESH, limit: int = 6) -> dict:
+        if user_id is None:
+            return {"error": "no user"}
+        try:
+            picks = self.rec.picks(user_id, n=self._limit(limit))
+        except (KeyError, ValueError):
+            return {"error": "not enough watch history for personal recommendations yet; use search_library"}
+        picks = picks[picks["list"] == list]
+        if picks.empty:
+            return {"results": [], "note": "nothing new on the server recently" if list == FRESH else "no results"}
+        taste = self._taste_fit(user_id)
+        results = []
+        for r in picks.itertuples():
+            item = {**self._summary(r.t_const, user_id, taste), "because_you_watched": r.because_you_watched}
+            if pd.notna(r.added_days_ago):
+                item["added_days_ago"] = int(r.added_days_ago)
+            if pd.notna(r.you_requested) and bool(r.you_requested):
+                item["you_requested_it"] = True
+            results.append(item)
+        return {"list": list, "results": results}
+
+    def my_watch_history(self, user_id: Optional[str] = None, order: str = "most_watched", limit: int = 15) -> dict:
+        h = self._history(user_id)
+        if h.empty:
+            return {"results": [], "note": "no watch history yet"}
+        if order == "recent":
+            h = h.sort_values("last_watched_timestamp", ascending=False, na_position="last")
+        else:
+            h = h.sort_values("total_seconds_watched", ascending=False)
+        results = [
+            {"title": self._name(r.imdb_id) if r.imdb_id in self.titles.index else r.unit_name,
+             "type": "show" if r.unit_type == "Series" else "movie", **self._watch_stats(r)}
+            for r in h.head(self._limit(limit, cap=30)).itertuples()
+        ]
+        return {"order": order, "results": results}
+
+    # ---- helpers ----
+
+    @staticmethod
+    def _limit(limit, cap: int = 15) -> int:
+        try:
+            return max(1, min(int(limit), cap))
+        except (TypeError, ValueError):
+            return 6
+
+    @staticmethod
+    def _people(people, cast: int) -> list[dict]:
+        """Crew first (each person once, all their roles), then the first `cast` cast members"""
+        people = list(people) if isinstance(people, (list, np.ndarray)) else []
+        crew: dict[str, dict] = {}
+        for p in people:
+            if p["role"] != "cast":
+                crew.setdefault(p["name"], {"name": p["name"], "roles": []})["roles"].append(p["role"])
+        out = [{"name": c["name"], "role": "/".join(c["roles"])} for c in crew.values()]
+        return out + [p for p in people if p["role"] == "cast"][:cast]
+
+    def _name(self, t_const: str) -> str:
+        r = self.titles.loc[t_const]
+        return f"{r['primary_name']} ({r['year']})" if pd.notna(r["year"]) else str(r["primary_name"])
+
+    def _resolve(self, title: str) -> tuple[str, list[str]]:
+        """
+        The best match for a title as a person would type it (any case, with or without "The", optionally with a year
+        in brackets), preferring titles on the server and then popular ones. Returns it and any other close matches.
+
+        Raises:
+            ValueError: nothing close enough
+        """
+        year = re.search(r"\((\d{4})\)\s*$", title.strip())
+        name = _norm(re.sub(r"\(\d{4}\)\s*$", "", title)) if year else _norm(title)
+        t = self.titles
+        hits = t[t["norm"] == name]
+        if hits.empty and len(name) >= 4:
+            hits = t[t["norm"].str.startswith(name) | t["norm"].str.contains(rf"\b{re.escape(name)}\b", regex=True)]
+        if hits.empty:
+            close = difflib.get_close_matches(name, t["norm"].unique().tolist(), n=3, cutoff=0.8)
+            hits = t[t["norm"].isin(close)]
+        if hits.empty:
+            raise ValueError(f"'{title}' isn't a title the server has or had; describe it to search_library instead")
+        hits = hits.assign(
+            year_match=(hits["year"] == int(year.group(1))).fillna(False) if year else False,
+            votes=hits["num_votes"].fillna(0),
+        ).sort_values(["year_match", "on_server", "votes"], ascending=False)
+        return hits.index[0], [self._name(o) for o in hits.index[1:4]]
+
+    def _mask(self, user_id: Optional[str], kind: str, include_watched: bool) -> np.ndarray:
+        mask = self.titles["on_server"].to_numpy().copy()
+        if kind in ("movie", "show"):
+            mask &= (self.titles["kind"] == kind).to_numpy()
+        if not include_watched and user_id is not None:
+            mask &= ~self.titles.index.isin(self._seen(user_id))
+        return mask
+
+    def _seen(self, user_id: str) -> list[str]:
+        try:
+            return self.rec.profiles.seen_by(user_id)
+        except KeyError:
+            return []
+
+    def _history(self, user_id: Optional[str]) -> pd.DataFrame:
+        h = self.rec.profiles.history
+        return h[h["user_id"] == user_id] if user_id is not None else h.iloc[0:0]
+
+    def _taste_fit(self, user_id: Optional[str]) -> Optional[pd.Series]:
+        """Percentile (0-100) of each server title's similarity to the user's taste, among server titles"""
+        if user_id is None:
+            return None
+        try:
+            similarity = self.rec.profiles.taste_similarity(user_id)
+        except (KeyError, ValueError):
+            return None
+        similarity = similarity[similarity.index.isin(self.library)]
+        return (similarity.rank(pct=True) * 100).round(0)
+
+    def _watch_stats(self, r) -> dict:
+        out = {"hours_watched": round(float(r.total_seconds_watched or 0) / 3600, 1)}
+        if r.unit_type == "Series" and pd.notna(r.items_watched):
+            out["episodes_watched"] = int(r.items_watched)
+        if pd.notna(r.last_watched_timestamp):
+            out["last_watched"] = str(r.last_watched_timestamp)[:10]
+        return out
+
+    def _watched_note(self, user_id: str, t_const: str):
+        h = self._history(user_id)
+        h = h[h["imdb_id"] == t_const]
+        return self._watch_stats(next(h.itertuples())) if len(h) else False
+
+    def _summary(self, t_const: str, user_id: Optional[str], taste: Optional[pd.Series]) -> dict:
+        r = self.titles.loc[t_const]
+        about = str(r["overview"] or "")
+        out = {
+            "title": self._name(t_const), "type": r["kind"], "genres": list(r["genres"] or [])[:3],
+            "keywords": list(r["keywords"] or [])[:LIST_KEYWORDS],
+            "about": about if len(about) <= ABOUT_CHARS else about[:ABOUT_CHARS].rsplit(" ", 1)[0] + "...",
+        }
+        if user_id is not None and t_const in self._seen(user_id):
+            out["you_watched"] = True
+        if taste is not None and t_const in taste.index:
+            out["taste_fit"] = int(taste[t_const])
+        return out

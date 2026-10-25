@@ -115,7 +115,7 @@ class UserProfiles:
         titles = self.profile_titles(user_id)
         profile = self.knn.profile_vector(titles["imdb_id"], titles["interest"])
         recs = self.knn.recommend_for_profile(
-            profile, n=n, allowed=allowed, types=types, exclude=self._seen_by(user_id), boost=boost
+            profile, n=n, allowed=allowed, types=types, exclude=self.seen_by(user_id), boost=boost
         )
         if recs.empty:
             return recs.assign(because_you_watched=pd.Series(dtype=object), shared=pd.Series(dtype=object))
@@ -132,7 +132,12 @@ class UserProfiles:
         ]
         return recs
 
-    def _seen_by(self, user_id: str) -> list[str]:
+    def taste_similarity(self, user_id: str) -> pd.Series:
+        """Cosine similarity of every title in the model to the user's taste profile, by t_const (raises like `recommend()`)"""
+        titles = self.profile_titles(user_id)
+        return self.knn.similarity_to_profile(self.knn.profile_vector(titles["imdb_id"], titles["interest"]))
+
+    def seen_by(self, user_id: str) -> list[str]:
         """Titles never to recommend: everything watched or marked played - but not titles only requested, since
         "the thing you asked for has arrived" is a fair recommendation"""
         h = self._history_of(user_id)

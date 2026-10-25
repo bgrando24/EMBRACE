@@ -128,6 +128,10 @@ class CosineKNN:
         vector = np.asarray(weights.to_numpy(dtype=np.float32) @ self._X[self._row_of[weights.index].to_numpy()]).ravel()
         return vector / np.linalg.norm(vector)
 
+    def similarity_to_profile(self, profile: np.ndarray) -> pd.Series:
+        """Cosine similarity of every title in the model to a taste profile (see `profile_vector()`), by t_const"""
+        return pd.Series(np.round(self._dot(profile), 6), index=self._ids)
+
     def recommend_for_profile(
         self,
         profile: np.ndarray,

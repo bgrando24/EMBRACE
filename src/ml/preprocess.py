@@ -121,12 +121,16 @@ class PreProcess:
         return set(prov.loc[(prov["provider"] == "imdb") & prov["item_id"].isin(current), "provider_item_id"])
 
 
+    # TMDB keyword for shows whose seasons stand alone (e.g. American Horror Story), see `get_playlist_items()`
+    ANTHOLOGY_KEYWORD = "anthology"
+
     def get_playlist_items(self) -> pd.Series:
         """
         The Emby item to put in a playlist for each library movie/series. Adding a series to an Emby playlist adds
-        every episode, so a series is represented by its first episode (lowest season >= 1, then episode number;
-        specials and unnumbered episodes only when there's nothing else). A movie in the library twice uses the
-        version added first.
+        every episode, so a series is represented by its S1E1 - and a series without S1E1 on the server is left out,
+        since starting a show part-way through looks wrong in a playlist. Anthologies (TMDB keyword ANTHOLOGY_KEYWORD:
+        every season is its own story) may instead start at episode 1 of their earliest season. A movie in the
+        library twice uses the version added first.
 
         Returns:
             Series: t_const -> Emby item ID, for current (not removed) items only
@@ -140,16 +144,26 @@ class PreProcess:
         movies = movies.dropna(subset=["t_const"]).sort_values(["date_created", "item_id"], na_position="last")
         movies = movies.drop_duplicates("t_const").set_index("t_const")["item_id"]
 
-        episodes = lib[(lib["item_type"] == "Episode") & lib["series_id"].notna()]
-        numbered = episodes["season_number"].fillna(0) >= 1
-        episodes = episodes.assign(numbered=numbered).sort_values(
-            ["numbered", "season_number", "episode_number", "item_id"], ascending=[False, True, True, True], na_position="last")
-        first_episode = episodes.drop_duplicates("series_id").set_index("series_id")["item_id"]
-        series = lib[lib["item_type"] == "Series"].assign(t_const=lambda d: d["item_id"].map(imdb),
-                                                          first=lambda d: d["item_id"].map(first_episode))
+        # episode 1 of each season, earliest season first
+        season_starts = lib[(lib["item_type"] == "Episode") & lib["series_id"].notna()
+                            & (lib["episode_number"] == 1) & (lib["season_number"] >= 1)]
+        season_starts = season_starts.sort_values(["season_number", "item_id"]).drop_duplicates("series_id")
+        first = season_starts.set_index("series_id")[["item_id", "season_number"]]
+
+        series = lib[lib["item_type"] == "Series"].assign(t_const=lambda d: d["item_id"].map(imdb))
+        series = series.join(first.rename(columns={"item_id": "first", "season_number": "first_season"}), on="item_id")
+        series = series[(series["first_season"] == 1) | series["t_const"].isin(self._anthologies())]
         series = series.dropna(subset=["t_const", "first"]).sort_values("item_id").drop_duplicates("t_const")
         series = series.set_index("t_const")["first"]
         return pd.concat([movies, series[~series.index.isin(movies.index)]]).rename("item_id")
+
+    def _anthologies(self) -> set[str]:
+        """IMDB IDs of shows TMDB tags with ANTHOLOGY_KEYWORD"""
+        d = self.sqlite.get_tmdb_title_details()
+        if d.empty:
+            return set()
+        d = d[d["keywords"].map(lambda k: self.ANTHOLOGY_KEYWORD in (k or []))]
+        return set(d["emby_imdb_id"].fillna(d["imdb_id"]).dropna())
 
 
     def get_title_content(self, imdb_titles: pd.DataFrame | None = None, movielens: pd.Series | None = None) -> pd.DataFrame:

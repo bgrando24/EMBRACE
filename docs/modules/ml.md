@@ -302,7 +302,9 @@ Columns: `list`, `rank`, `t_const`, `primary_name`, `start_year`, `type`, `simil
 
 Runs after the refresh (see [Scheduled Jobs](../workflows/cron_jobs.md)):
 - **Emby playlists:** each eligible user gets two private playlists, "Fresh for you" and "From the back catalogue", updated in place. Emby only lists a playlist to its owner.
-- **Shows:** adding a series to an Emby playlist adds every episode, so a show is represented by its first episode (`PreProcess.get_playlist_items()`).
+- **Shows:** adding a series to an Emby playlist adds every episode, so a show is represented by its S1E1 (`PreProcess.get_playlist_items()`).
+  - **Missing S1E1:** a show whose S1E1 isn't on the server is left out, and the next pick takes its place.
+  - **Anthologies:** shows TMDB tags `anthology`, where each season stands alone, may start at episode 1 of their earliest season.
 - **Discord preview:** a summary of everyone's top 3 per list goes to `DISCORD_WEBHOOK_URL`.
 - **Log:** every pick is appended to [`recommendation_log`](../databases/sqlite.md#recommendation-log), so later watch history can show which picks were actually watched.
 - **Opt-out:** users named in `EMBRACE_PICKS_EXCLUDE_USERS` get no playlists, and their picks are left out of the preview.

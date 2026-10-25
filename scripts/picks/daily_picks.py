@@ -84,9 +84,12 @@ def main():
     try:
         pp = PreProcess()
         rec = Recommender.load(pp)
+        playlist_items = pp.get_playlist_items()
+        # only titles that can go in a playlist, so each list still fills up (e.g. shows missing their S1E1 are out)
+        rec.library &= set(playlist_items.index)
         picks = rec.all_picks(n=args.n, users=set(names))
         picks["user_name"] = picks["user_id"].map(names)
-        picks["item_id"] = picks["t_const"].map(pp.get_playlist_items())
+        picks["item_id"] = picks["t_const"].map(playlist_items)
     except Exception as e:
         fail("recommendations", e, notify)
     model = type(rec.knn).__name__

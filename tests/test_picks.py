@@ -10,7 +10,7 @@ from ml import ContentKNN, Freshness, PreProcess, Recommender, Requests, UserPro
 from ml.picks import BACK_CATALOGUE, FRESH
 from test_content_knn import CONTENT
 from test_freshness import ADDITIONS
-from test_tmdb_content import response
+from test_tmdb_content import details, response
 from utils import Notifications
 
 
@@ -84,7 +84,15 @@ class TempDBTestCase(unittest.TestCase):
 
 class TestPlaylistItems(TempDBTestCase):
 
-    def test_movies_are_themselves_and_series_their_first_episode(self):
+    def items(self, anthologies=()):
+        pp = PreProcess("test.db")
+        pp._anthologies = lambda: set(anthologies)
+        try:
+            return pp.get_playlist_items().to_dict()
+        finally:
+            pp.sqlite._connection.close()
+
+    def test_movies_are_themselves_and_series_their_s1e1(self):
         self.db.ingest_all_library_items(iter([
             item("m-new", "Movie", "tt1", created="2026-05-01"),
             item("m-old", "Movie", "tt1", created="2026-01-01"),        # same movie twice: first added wins
@@ -94,15 +102,29 @@ class TestPlaylistItems(TempDBTestCase):
             item("s1-e1", "Episode", series_id="s1", season=1, episode=1),
             item("s1-s2", "Episode", series_id="s1", season=2, episode=1),
             item("s2", "Series", "tt3"),
-            item("s2-special", "Episode", series_id="s2", season=0, episode=1),     # only specials: use them
-            item("s3", "Series", "tt4"),                                            # no episodes: not playable
+            item("s2-special", "Episode", series_id="s2", season=0, episode=1),     # only specials
+            item("s3", "Series", "tt4"),                                            # no episodes
+            item("s4", "Series", "tt5"),
+            item("s4-s3e1", "Episode", series_id="s4", season=3, episode=1),        # only a later season
+            item("s5", "Series", "tt6"),
+            item("s5-s1e4", "Episode", series_id="s5", season=1, episode=4),        # season 1 without its start
         ]))
+        self.assertEqual(self.items(), {"tt1": "m-old", "tt2": "s1-e1"})
+        # an anthology may start at its earliest season, but never part-way through one
+        self.assertEqual(self.items(anthologies={"tt5", "tt6"}), {"tt1": "m-old", "tt2": "s1-e1", "tt5": "s4-s3e1"})
+
+    def test_anthologies_come_from_tmdb_keywords(self):
+        self.db.ingest_all_library_items(iter([
+            {**item("s1", "Series", "tt1"), "ProviderIds": {"Imdb": "tt1", "Tmdb": "11"}},
+            {**item("s2", "Series", "tt2"), "ProviderIds": {"Imdb": "tt2", "Tmdb": "22"}},
+        ]))
+        keywords = {11: ["anthology", "horror"], 22: ["sitcom"]}
+        self.db.ingest_tmdb_title_details(lambda media_type, tmdb_id: details(media_type, tmdb_id, keywords=keywords[tmdb_id]))
         pp = PreProcess("test.db")
         try:
-            items = pp.get_playlist_items()
+            self.assertEqual(pp._anthologies(), {"tt1"})
         finally:
             pp.sqlite._connection.close()
-        self.assertEqual(items.to_dict(), {"tt1": "m-old", "tt2": "s1-e1", "tt3": "s2-special"})
 
 
 class TestRecommendationLog(TempDBTestCase):

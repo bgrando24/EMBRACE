@@ -121,6 +121,25 @@ class PreProcess:
         return set(prov.loc[(prov["provider"] == "imdb") & prov["item_id"].isin(current), "provider_item_id"])
 
 
+    def get_title_runtimes(self) -> pd.Series:
+        """
+        Minutes per IMDB title on the Emby server: a movie's runtime, or a series' median episode runtime (from Emby;
+        items without a runtime are skipped). An ID that is both a movie and a series keeps the movie's.
+        """
+        lib = self.sqlite.get_library_items()
+        lib = lib[lib["removed_at"].isna() & (lib["runtime_seconds"].fillna(0) > 0)]
+        prov = self.sqlite.get_item_provider_ids()
+        imdb = prov[prov["provider"] == "imdb"].drop_duplicates("item_id").set_index("item_id")["provider_item_id"]
+        movies = lib[lib["item_type"] == "Movie"]
+        episodes = lib[lib["item_type"] == "Episode"]
+        movies = movies.assign(t_const=movies["item_id"].map(imdb)).dropna(subset=["t_const"])
+        episodes = episodes.assign(t_const=episodes["series_id"].map(imdb)).dropna(subset=["t_const"])
+        movies = movies.groupby("t_const")["runtime_seconds"].median()
+        series = episodes.groupby("t_const")["runtime_seconds"].median()
+        out = pd.concat([movies, series[~series.index.isin(movies.index)]])
+        return (out / 60).round().astype(int).rename("minutes")
+
+
     # TMDB keyword for shows whose seasons stand alone (e.g. American Horror Story), see `get_playlist_items()`
     ANTHOLOGY_KEYWORD = "anthology"
 

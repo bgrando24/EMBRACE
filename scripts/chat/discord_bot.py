@@ -73,8 +73,9 @@ class Brain:
 
     def load(self) -> None:
         mtime = self.db_path.stat().st_mtime if self.db_path.exists() else 0.0
-        rec = Recommender.load(PreProcess(), log=log)
-        self.tools = LibraryTools(rec)
+        pp = PreProcess()
+        rec = Recommender.load(pp, log=log)
+        self.tools = LibraryTools(rec, runtimes=pp.get_title_runtimes())
         try:
             self.emby_ids = {name.casefold(): uid for name, uid in EmbyConnector().get_all_emby_users().items()}
         except Exception as e:     # Emby down: fall back to the names in watch history

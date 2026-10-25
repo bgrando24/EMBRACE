@@ -26,14 +26,15 @@ def main():
     p.add_argument("--tools", action="store_true", help="print each tool call")
     args = p.parse_args()
 
-    rec = Recommender.load(PreProcess(), log=lambda m: print(f"[INFO] {m}"))
+    pp = PreProcess()
+    rec = Recommender.load(pp, log=lambda m: print(f"[INFO] {m}"))
     users = rec.profiles.users()
     match = users[users["user_name"].str.casefold() == args.user.casefold()]
     user_id = match["user_id"].iloc[0] if len(match) else None
     if user_id is None:
         print(f"[WARN] no watch history for {args.user}: personal tools will say so")
     llm = OllamaClient()
-    session = ChatSession(llm, LibraryTools(rec), user_id, args.user, log=print if args.tools else lambda _: None)
+    session = ChatSession(llm, LibraryTools(rec, runtimes=pp.get_title_runtimes()), user_id, args.user, log=print if args.tools else lambda _: None)
 
     questions = iter(args.ask) if args.ask else None
     print(f"[INFO] {llm.model} via {llm.find_host() or 'no host yet'} - 'reset' starts over, Ctrl-D quits")

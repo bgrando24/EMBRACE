@@ -35,11 +35,13 @@ class LibraryTools:
     are small JSON documents, since they go into the model's context.
     """
 
-    def __init__(self, rec: Recommender, library: Optional[set[str]] = None):
+    def __init__(self, rec: Recommender, library: Optional[set[str]] = None, runtimes: Optional[pd.Series] = None):
         """
         Args:
             rec (Recommender): needs `content` (TMDB details), i.e. the content model
             library (set, optional): IMDB IDs on the server - DEFAULT: `rec.library`
+            runtimes (Series, optional): `PreProcess.get_title_runtimes()` - minutes per title (episodes: per
+                episode), shown in results and used by search's `max_minutes`
         """
         if rec.content is None:
             raise ValueError("The chat tools need TMDB title details (the content model)")
@@ -51,6 +53,7 @@ class LibraryTools:
             year=pd.to_numeric(c["start_year"], errors="coerce").astype("Int64"),
             on_server=c.index.isin(self.library),
             norm=c["primary_name"].map(_norm),
+            minutes=(runtimes if runtimes is not None else pd.Series(dtype=float)).reindex(c.index).astype("Int64"),
         )
         self._ids = self.titles.index.to_numpy()
 
@@ -76,6 +79,7 @@ class LibraryTools:
                     "query": {"type": "string", "description": "descriptive keywords"},
                     "like": {"type": "string", "description": "a title the user liked, to find titles similar to it"},
                     "kind": {"type": "string", "enum": ["movie", "show", "any"], "description": "default any"},
+                    "max_minutes": {"type": "integer", "description": "only titles at most this long (shows: per episode)"},
                     "include_watched": {"type": "boolean", "description": "default false"},
                     "limit": {"type": "integer", "description": "default 6"},
                 },
@@ -145,12 +149,16 @@ class LibraryTools:
     # ---- tools ----
 
     def search_library(self, query: str = "", user_id: Optional[str] = None, like: Optional[str] = None,
-                       kind: str = "any", include_watched: bool = False, limit: int = 6) -> dict:
+                       kind: str = "any", max_minutes: Optional[int] = None, include_watched: bool = False,
+                       limit: int = 6) -> dict:
         """
         Text match to `query`; with `like`, the average of that and the similarity to the `like` title, each scaled
-        to its best match (so a small model gets both in one call, rather than having to merge two tool results)
+        to its best match (so a small model gets both in one call, rather than having to merge two tool results).
+        `max_minutes` leaves out titles that are longer, or whose length isn't known.
         """
         mask = pd.Series(self._mask(user_id, kind, include_watched), index=self._ids)
+        if max_minutes:
+            mask &= (self.titles["minutes"] <= int(max_minutes)).fillna(False).to_numpy(dtype=bool)
         q = self._vectorizer.transform([query or ""])
         score = pd.Series(np.asarray((self._X @ q.T).todense()).ravel(), index=self._ids)[mask]
         score = score / score.max() if score.max() > 0 else score
@@ -205,6 +213,7 @@ class LibraryTools:
         }
         if pd.notna(r["avg_rating"]):
             out["imdb_rating"] = float(r["avg_rating"])
+        out.update(self._length(t_const))
         if user_id is not None:
             out["you_watched"] = self._watched_note(user_id, t_const)
             if (fit := self._taste_fit(user_id)) is not None and t_const in fit.index:
@@ -327,6 +336,12 @@ class LibraryTools:
         similarity = similarity[similarity.index.isin(self.library)]
         return (similarity.rank(pct=True) * 100).round(0)
 
+    def _length(self, t_const: str) -> dict:
+        minutes = self.titles.loc[t_const, "minutes"]
+        if pd.isna(minutes):
+            return {}
+        return {"episode_minutes" if self.titles.loc[t_const, "kind"] == "show" else "minutes": int(minutes)}
+
     def _watch_stats(self, r) -> dict:
         out = {"hours_watched": round(float(r.total_seconds_watched or 0) / 3600, 1)}
         if r.unit_type == "Series" and pd.notna(r.items_watched):
@@ -347,6 +362,7 @@ class LibraryTools:
             "title": self._name(t_const), "type": r["kind"], "genres": list(r["genres"] or [])[:3],
             "keywords": list(r["keywords"] or [])[:LIST_KEYWORDS],
             "about": about if len(about) <= ABOUT_CHARS else about[:ABOUT_CHARS].rsplit(" ", 1)[0] + "...",
+            **self._length(t_const),
         }
         if user_id is not None and t_const in self._seen(user_id):
             out["you_watched"] = True

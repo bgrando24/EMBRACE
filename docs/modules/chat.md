@@ -27,6 +27,10 @@ the server, and lets a small local model give grounded answers.
 | `my_recommendations` | Your daily picks (`Recommender.picks()`): `fresh` or `back_catalogue`. |
 | `my_watch_history` | What you watched most, or most recently. |
 
+Results include each title's length from Emby (`PreProcess.get_title_runtimes()`: a movie's runtime, or a show's
+median episode), and `search_library` takes `max_minutes` ("under 2 hours"), which also leaves out titles whose
+length isn't known, so the limit is a promise.
+
 Every result marks titles you've watched, and (when you have enough history) a `taste_fit` from 0 to 100: how close
 the title is to your taste profile, as a percentile of the library. Search and similar titles leave out what you've
 watched unless asked. Titles are matched the way people type them (any case, with or without "The", small typos,
@@ -67,6 +71,9 @@ Set `EMBRACE_LLM_MODEL` to try others: the model must support tools in Ollama (s
 ollama.com/library), and the same name must be set for `llm.sh` (which pulls it) and for the bot. Thinking mode is
 off: on test questions it made answers about 4x slower (about 37 s vs 8 s on an M4 Pro) without choosing better
 titles or tools.
+
+Speed, measured Oct 2026: about 8 s per answer on an M4 Pro, about 3 s on an RTX 3070 Ti (8 GB; the model plus
+context use about 6.8 GB). The first answer after the model was unloaded adds its loading time (up to ~30 s).
 
 ## The Discord bot: `scripts/chat/discord_bot.py`
 

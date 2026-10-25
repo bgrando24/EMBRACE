@@ -7,11 +7,11 @@ import requests
 
 from chat import ChatSession, LibraryTools, LLMUnavailable, OllamaClient
 from chat.session import MAX_TOOL_ROUNDS
-from ml import ContentKNN, Freshness, Recommender, Requests, UserProfiles
+from ml import ContentKNN, Freshness, PreProcess, Recommender, Requests, UserProfiles
 from test_content_knn import CONTENT
 from test_freshness import ADDITIONS
 from test_tmdb_content import response
-from test_picks import watched
+from test_picks import TempDBTestCase, item, watched
 
 # tt5 is a show, tt8 (no features) and tt6 aren't on the server
 CHAT_CONTENT = CONTENT.assign(type=CONTENT["type"].where(CONTENT["t_const"] != "tt5", "tvSeries"))
@@ -26,7 +26,7 @@ def make_tools() -> LibraryTools:
     ])
     rec = Recommender(knn=knn, profiles=UserProfiles(knn, history), library=LIBRARY, freshness=Freshness(ADDITIONS),
                       requests=Requests(pd.DataFrame(columns=["user_id", "t_const", "requested_at"])), content=CHAT_CONTENT)
-    return LibraryTools(rec)
+    return LibraryTools(rec, runtimes=pd.Series({"tt2": 95, "tt4": 140, "tt5": 22}))
 
 
 def titles(result: str) -> list[str]:
@@ -57,6 +57,15 @@ class TestLibraryTools(unittest.TestCase):
         out = json.loads(self.tools.call("search_library", {"query": "funny", "like": "Nope Nothing"}, "u1"))
         self.assertIn("isn't a title", out["like"])
         self.assertTrue(out["results"])
+
+    def test_lengths_are_shown_and_filter(self):
+        out = json.loads(self.tools.call("search_library", {"query": "funny detective family bank", "limit": 15}, "u1"))
+        lengths = {r["title"]: r.get("minutes", r.get("episode_minutes")) for r in out["results"]}
+        self.assertEqual(lengths["Detective Comedy (2000)"], 140)
+        self.assertEqual(out["results"][[r["title"] for r in out["results"]].index("Sitcom (2000)")]["episode_minutes"], 22)
+        # unknown lengths are left out too: "under 100 minutes" should be a promise
+        short = titles(self.tools.call("search_library", {"query": "funny detective family bank", "max_minutes": 100}, "u1"))
+        self.assertEqual(set(short), {"Heist Two (2000)", "Sitcom (2000)"})
 
     def test_kind_filter(self):
         self.assertEqual(titles(self.tools.call("search_library", {"query": "funny", "kind": "show"}, "u1")), ["Sitcom (2000)"])
@@ -93,6 +102,26 @@ class TestLibraryTools(unittest.TestCase):
         self.assertTrue(titles(self.tools.call("search_library", {"query": "bank", "colour": "red"}, "u1")))
         self.assertEqual({s["function"]["name"] for s in self.tools.schemas()},
                          {"search_library", "similar_titles", "title_info", "my_recommendations", "my_watch_history"})
+
+
+class TestTitleRuntimes(TempDBTestCase):
+
+    def test_movies_their_runtime_series_their_median_episode(self):
+        def timed(minutes, *args, **kwargs):
+            return {**item(*args, **kwargs), "RunTimeTicks": minutes * 60 * 10_000_000}
+        self.db.ingest_all_library_items(iter([
+            timed(101, "m1", "Movie", "tt1"),
+            timed(0, "m2", "Movie", "tt2"),                     # no runtime: skipped
+            item("s1", "Series", "tt3"),
+            timed(20, "e1", "Episode", series_id="s1", season=1, episode=1),
+            timed(22, "e2", "Episode", series_id="s1", season=1, episode=2),
+            timed(60, "e3", "Episode", series_id="s1", season=1, episode=3),
+        ]))
+        pp = PreProcess("test.db")
+        try:
+            self.assertEqual(pp.get_title_runtimes().to_dict(), {"tt1": 101, "tt3": 22})
+        finally:
+            pp.sqlite._connection.close()
 
 
 class FakeLLM:

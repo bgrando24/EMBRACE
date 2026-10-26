@@ -63,12 +63,29 @@ class TestLibraryTools(unittest.TestCase):
         self.assertEqual(out["like"], "Heist One (2000)")
         found = [r["title"] for r in out["results"]]
         self.assertNotIn("Heist One (2000)", found)                       # never the title itself
-        self.assertEqual(found[0], "Heist Two (2000)")                    # not funny, but very like Heist One
-        self.assertIn("heist", out["results"][0]["in_common"])
+        self.assertIn("Heist Two (2000)", found[:2])                      # not funny, but very like Heist One
+        self.assertIn("heist", out["results"][found.index("Heist Two (2000)")]["in_common"])
         # an unknown `like` is reported, and the text search still runs
         out = json.loads(self.tools.call("search_library", {"query": "funny", "like": "Nope Nothing"}, "u1"))
         self.assertIn("no title called", out["like"])
         self.assertTrue(out["results"])
+
+    def test_better_rated_titles_go_first_among_equal_matches(self):
+        def ranked(ratings: dict) -> list[str]:
+            content = CHAT_CONTENT.assign(
+                avg_rating=CHAT_CONTENT["t_const"].map(ratings).fillna(7.0),
+                num_votes=CHAT_CONTENT["t_const"].map({t: 10**6 for t in ratings}).fillna(CHAT_CONTENT["num_votes"]))
+            rec = Recommender(knn=ContentKNN(content), profiles=self.tools.profiles, library=LIBRARY,
+                              freshness=Freshness(ADDITIONS), requests=self.tools.rec.requests, content=content)
+            # "comedies" asks for Comedy and matches no text, so the two comedies match it equally
+            return titles(LibraryTools(rec).call("search_library", {"query": "comedies"}, None))[:2]
+
+        self.assertEqual(ranked({"tt4": 8.5, "tt5": 5.5}), ["Detective Comedy (2000)", "Sitcom (2000)"])
+        self.assertEqual(ranked({"tt4": 5.5, "tt5": 8.5}), ["Sitcom (2000)", "Detective Comedy (2000)"])
+
+    def test_movie_or_show_in_the_query_doesnt_change_the_match(self):
+        self.assertEqual(titles(self.tools.call("search_library", {"query": "bank heist crew movie"}, "u1")),
+                         titles(self.tools.call("search_library", {"query": "bank heist crew"}, "u1")))
 
     def test_genre_words_in_the_query_rank_that_genre_first(self):
         # "bank job" is a strong text match for Heist Two, but "funny" asks for a comedy

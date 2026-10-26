@@ -7,7 +7,7 @@ from typing import Callable, Iterable, Optional
 import numpy as np
 import pandas as pd
 import scipy.sparse as sp
-from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS, TfidfVectorizer
 
 from ml import ContentKNN, Recommender, UserProfiles
 from ml.picks import BACK_CATALOGUE, FRESH
@@ -19,6 +19,17 @@ ABOUT_CHARS = 220
 # how many keywords / cast members to show per title
 LIST_KEYWORDS = 6
 INFO_CAST = 6
+# words text search ignores besides English stop words: a query's "movie" or "show" is what `kind` is for, and in a
+# plot it says nothing ("a movie star")
+SEARCH_STOP_WORDS = list(ENGLISH_STOP_WORDS | {"movie", "movies", "film", "films", "show", "shows", "series", "tv",
+                                               "watch", "something", "good", "great", "best"})
+# how much search ranking leans on a title's IMDB rating: relevance x (1 - QUALITY_WEIGHT + QUALITY_WEIGHT x quality),
+# so of equally good matches the better-rated go first, while a clearly better match still wins. Matters once search
+# covers thousands of titles beyond the server, many of them obscure
+QUALITY_WEIGHT = 0.2
+# the IMDB rating is pulled towards QUALITY_PRIOR_RATING by QUALITY_PRIOR_VOTES votes (a Bayesian average), so an 8.5
+# from 2k votes counts for less than one from 500k
+QUALITY_PRIOR_RATING, QUALITY_PRIOR_VOTES = 6.5, 10_000
 # words in a search query that ask for a genre (IMDB's genre names), so that "something funny" ranks comedies first
 # rather than whatever mentions the query's other words most
 GENRE_WORDS = {
@@ -135,8 +146,13 @@ class LibraryTools:
 
         # text search over everything said about a title; bigrams so "small town" or "serial killer" match as phrases
         docs = [self._doc(r.primary_name, r.genres, r.keywords, r.people, r.overview) for r in self.titles.itertuples()]
-        self._vectorizer = TfidfVectorizer(stop_words="english", ngram_range=(1, 2), sublinear_tf=True)
+        self._vectorizer = TfidfVectorizer(stop_words=SEARCH_STOP_WORDS, ngram_range=(1, 2), sublinear_tf=True)
         self._X = sp.csr_matrix(self._vectorizer.fit_transform(docs))
+        # 0-1 from the vote-weighted IMDB rating (5 or less -> 0, 9 or more -> 1); no rating -> in between
+        votes = self.titles["num_votes"].fillna(0).astype(float)
+        rating = (votes * self.titles["avg_rating"].fillna(QUALITY_PRIOR_RATING).astype(float)
+                  + QUALITY_PRIOR_VOTES * QUALITY_PRIOR_RATING) / (votes + QUALITY_PRIOR_VOTES)
+        self._quality = ((rating - 5) / 4).clip(0, 1).to_numpy()
 
         self._tools: dict[str, tuple[Callable, dict]] = {
             "search_library": (self.search_library, {
@@ -258,6 +274,8 @@ class LibraryTools:
         if exclude:
             out["left_out"] = "titles already suggested in this conversation"
         score = sum(parts) / len(parts) if parts else pd.Series(dtype=float)
+        if len(score):
+            score = score * (1 - QUALITY_WEIGHT + QUALITY_WEIGHT * pd.Series(self._quality[mask], index=ids))
         top = score[score > 0].sort_values(ascending=False).head(self._limit(limit))
         if top.empty:
             return {**out, "results": [], "note": "nothing matched; try other words (synonyms, setting, genre)"}

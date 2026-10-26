@@ -113,9 +113,11 @@ Override per instance with `ContentKNN(content, weights={...})`.
 - shrinking blocks with few tokens
 - dropping keywords that appear in more than 5-20% of titles
 
-### `PreProcess.get_title_content(imdb_titles=None, movielens=None)`
+### `PreProcess.get_title_content(imdb_titles=None, movielens=None, discovery=False)`
 
 One row per IMDB title with fetched TMDB details, built from `tmdb_title_details` (see [SQLite](../databases/sqlite.md)).
+
+- **Library titles only by default.** With `discovery=True`, the titles fetched beyond the library (for the chat-bot) are included too, with `in_library` False. `Recommender.load(discovery=True)` keeps them as `rec.discovery`, and builds the picks' model from the library's titles either way.
 
 - **IMDB ID:** Emby's IMDB ID for the title is preferred over TMDB's, since watch history is linked through Emby's.
 - **With `imdb_titles`** (the output of `imdb_get_encoded_genres()`): IMDB names, types, years, ratings, vote counts and genres are used where IMDB has the title.

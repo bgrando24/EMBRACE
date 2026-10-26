@@ -1,9 +1,10 @@
 # Chat-bot (`src/chat`)
 
 EMBRACE's conversational interface: ask for something to watch in plain language ("a funny show like Letterkenny",
-"a tense thriller under 2 hours", "what should I watch tonight?") and get a few picks from **your** server, chosen
-with **your** watch history in mind. It runs as a Discord bot, with a local LLM (via [Ollama](https://ollama.com))
-that is only running when you start it.
+"a tense thriller under 2 hours", "what should I watch tonight?") and get a few picks chosen with **your** watch
+history in mind: from the server, and beyond it (about 12,000 well-known titles it doesn't have, to request in
+Jellyseerr). It runs as a Discord bot, with a local LLM (via [Ollama](https://ollama.com)) that is only running when
+you start it.
 
 ```
 Discord ──► discord_bot.py (EMBRACE host, always on) ──► OllamaClient ──► Ollama (a GPU machine / Mac, on demand)
@@ -15,16 +16,24 @@ Discord ──► discord_bot.py (EMBRACE host, always on) ──► OllamaClien
 
 ## How it answers
 
-The LLM never answers from its own memory of films: it is given **tools** over the library and calls them before
-answering (the system prompt in `chat/session.py` insists on it). That keeps answers to titles that are actually on
-the server, and lets a small local model give grounded answers.
+The LLM never answers from its own memory of films: it is given **tools** over the titles EMBRACE has details of,
+and calls them before answering (the system prompt in `chat/session.py` insists on it). That keeps answers to real
+titles described from real data, and lets a small local model give grounded answers.
+
+Those titles are the library's (on the server, or once were) and the titles beyond it that the daily refresh fetches
+TMDB details for: everything TMDB recommends for a library title, and IMDB titles with 25,000+ votes (see
+[SQLite: titles beyond the library](../databases/sqlite.md#titles-beyond-the-library)). Search and similar titles
+cover both by default; every result says whether it's `on_server`, and the answer marks picks that aren't, so you can
+request them. Asking for "something on Emby" or "to watch tonight" limits it to the server (`availability`). The
+tools use their own `ContentKNN` and taste profiles over all of these titles; the daily picks and playlists keep the
+library-only model, since they can only hold what the server has.
 
 | Tool | What it does |
 | --- | --- |
 | `search_library` | Text search (TF-IDF, words and two-word phrases) over each title's name, genres, TMDB keywords, cast/crew and plot, for moods and descriptions. Words that ask for a genre ("funny", "comedy", "scary", "thriller", "sci-fi"...: `GENRE_WORDS`) also count: the share of those genres a title has is averaged with the text match, so "funny small town show" gives comedies, not every show that mentions a small town. With `like` (a title the user liked), that's averaged with the similarity to the `like` title, each scaled to its best match: one call does "like X, but ...", which a small model handles much better than combining two tool results itself. |
 | `similar_titles` | `ContentKNN` neighbours of a title (keywords, people, plot, genre, MovieLens), with what they have in common. |
 | `title_info` | One title's plot, genres, keywords, crew and cast, whether it's on the server, and whether you've watched it. |
-| `my_recommendations` | Your daily picks (`Recommender.picks()`): `fresh` or `back_catalogue`. |
+| `my_recommendations` | Your daily picks (`Recommender.picks()`): `fresh` or `back_catalogue`. These are on the server. |
 | `my_watch_history` | What you watched most, or most recently. |
 
 Results include each title's length from Emby (`PreProcess.get_title_runtimes()`: a movie's runtime, or a show's
@@ -32,12 +41,13 @@ median episode), and `search_library` takes `max_minutes` ("under 2 hours"), whi
 length isn't known, so the limit is a promise.
 
 Every result marks titles you've watched, and (when you have enough history) a `taste_fit` from 0 to 100: how close
-the title is to your taste profile, as a percentile of the library. Search and similar titles leave out what you've
+the title is to your taste profile, as a percentile of all the titles. Watch history only covers the server, so a
+title beyond it may be one you've seen elsewhere: say so, and the bot takes it on board. Search and similar titles leave out what you've
 watched unless asked. Titles are matched the way people type them (any case, with or without "The", small typos,
 an optional year in brackets).
 
-**Titles the server never had.** "Something like X" shouldn't depend on the server having had X. When a title isn't
-in the library, it's looked up on TMDB (`TMDBConnector.search_title`, `chat.tmdb_lookup`; needs
+**Any other title.** "Something like X" shouldn't depend on EMBRACE having X's details. When it doesn't, X is looked
+up on TMDB (`TMDBConnector.search_title`, `chat.tmdb_lookup`; needs
 `TMDB_READ_ACCESS_TOKEN`, as the nightly refresh does): `like` and `similar_titles` then compare it by the text match
 to its genres, keywords, people and plot (not its name, so "The Boys" isn't like "Trailer Park Boys"), and
 `title_info` describes it and suggests requesting it. A TMDB match whose name isn't close to the one asked for is
@@ -113,7 +123,7 @@ Discord ID and asked to get linked, and nothing about the library or anyone's hi
     journalctl --user -u embrace-chat -f     # tool calls are logged here
     ```
 
-    The bot itself is light (the recommender data, about 0.5-1 GB of memory); the LLM runs elsewhere.
+    The bot itself is light (the recommender data, about 1 GB of memory); the LLM runs elsewhere.
 
 ## In the terminal: `scripts/chat/chat_cli.py`
 
@@ -132,7 +142,8 @@ PYTHONPATH=src python scripts/chat/chat_cli.py --user <emby name> --ask "a heist
 - **Search is word-based.** "Canadian" doesn't match the keyword "canada"; the model is told to search with several
   descriptive keywords and retry, which mostly covers it. Embedding search (semantic matching, computed by the same
   Ollama) is the planned improvement, together with richer per-title tags (README goal 2).
-- **Only titles on the server are recommended.** A Jellyseerr "request this" button for titles that aren't is on
-  the roadmap.
+- **Titles beyond the server are the well-known ones** (TMDB's recommendations for the library, and 25,000+ IMDB
+  votes); anything else is only reachable by name (looked up on TMDB). A Jellyseerr "request this" button is on the
+  roadmap.
 - The `taste_fit` and tool results are only as good as the watch history: with little history, answers are driven
   by the request alone.

@@ -9,7 +9,7 @@ import pandas as pd
 import scipy.sparse as sp
 from sklearn.feature_extraction.text import TfidfVectorizer
 
-from ml import Recommender
+from ml import ContentKNN, Recommender, UserProfiles
 from ml.picks import BACK_CATALOGUE, FRESH
 
 # IMDB title types shown to the LLM as "show"; everything else (movie, tvMovie, ...) is a "movie"
@@ -44,6 +44,9 @@ GENRE_WORDS = {
     "Biography": ["biopic", "biography"],
     "History": ["historical", "history", "period piece"],
 }
+# where a recommended title may be: anywhere (the default: what's worth watching, whether the server has it or not),
+# or only on the server / only not on it
+AVAILABILITY = ["anywhere", "on_server", "not_on_server"]
 # tools whose results leave out titles already suggested in the conversation (see `call`)
 EXCLUDING_TOOLS = {"search_library", "similar_titles", "my_recommendations"}
 
@@ -80,8 +83,9 @@ def tmdb_lookup(tmdb) -> Callable[[str], Optional[dict]]:
 
 class LibraryTools:
     """
-    What the chat-bot can look up, as tools for an LLM (see `chat.ChatSession`): searching the server's library by
-    description, similar titles, details of one title, and the user's own picks and watch history.
+    What the chat-bot can look up, as tools for an LLM (see `chat.ChatSession`): searching by description, similar
+    titles, details of one title, and the user's own picks and watch history. Titles are the library's and, when
+    loaded (`Recommender.load(discovery=True)`), thousands beyond it, each marked with whether the server has it.
 
     Everything is built once from a `Recommender` and shared by all users; each call says which user it's for. Results
     are small JSON documents, since they go into the model's context.
@@ -103,7 +107,15 @@ class LibraryTools:
         self.rec = rec
         self.lookup = lookup
         self.library = set(library if library is not None else rec.library)
-        c = rec.content.drop_duplicates("t_const").set_index("t_const")
+        if rec.discovery is not None and len(rec.discovery):
+            # a model over the library and the titles beyond it, so they can be similar to each other; the daily
+            # picks keep the library-only `rec.knn`
+            content = pd.concat([rec.content, rec.discovery], ignore_index=True)
+            self.knn = ContentKNN(content)
+            self.profiles = UserProfiles(self.knn, rec.profiles.history)
+        else:
+            content, self.knn, self.profiles = rec.content, rec.knn, rec.profiles
+        c = content.drop_duplicates("t_const").set_index("t_const")
         year = pd.to_numeric(c["start_year"], errors="coerce").astype("Int64")
         self.titles = c.assign(
             kind=np.where(c["type"].isin(SHOW_TYPES), "show", "movie"),
@@ -128,7 +140,7 @@ class LibraryTools:
 
         self._tools: dict[str, tuple[Callable, dict]] = {
             "search_library": (self.search_library, {
-                "description": "Find titles on the server matching a description: themes, setting, tone, plot "
+                "description": "Find titles matching a description: themes, setting, tone, plot "
                                "elements, genre, actors or directors. Write the query as descriptive keywords, e.g. "
                                "'small town canada comedy hockey' rather than a question. Whenever the user names a "
                                "title they liked (on the server or not), also pass it as `like`: results then match "
@@ -137,6 +149,8 @@ class LibraryTools:
                     "query": {"type": "string", "description": "descriptive keywords"},
                     "like": {"type": "string", "description": "a title the user liked, to find titles similar to it"},
                     "kind": {"type": "string", "enum": ["movie", "show", "any"], "description": "default any"},
+                    "availability": {"type": "string", "enum": AVAILABILITY,
+                                     "description": "default anywhere: on the server or not"},
                     "max_minutes": {"type": "integer", "description": "only titles at most this long (shows: per episode)"},
                     "include_watched": {"type": "boolean", "description": "default false"},
                     "limit": {"type": "integer", "description": "default 6"},
@@ -144,12 +158,14 @@ class LibraryTools:
                 "required": ["query"],
             }),
             "similar_titles": (self.similar_titles, {
-                "description": "Titles on the server most similar to a given title (by keywords, cast and crew, "
+                "description": "Titles most similar to a given title (by keywords, cast and crew, "
                                "plot, genre, and what other viewers liked). The given title doesn't have to be on "
                                "the server.",
                 "properties": {
                     "title": {"type": "string", "description": "the title's name, optionally with its year"},
                     "kind": {"type": "string", "enum": ["movie", "show", "any"], "description": "default any"},
+                    "availability": {"type": "string", "enum": AVAILABILITY,
+                                     "description": "default anywhere: on the server or not"},
                     "include_watched": {"type": "boolean", "description": "default false"},
                     "limit": {"type": "integer", "description": "default 6"},
                 },
@@ -213,8 +229,8 @@ class LibraryTools:
     # ---- tools ----
 
     def search_library(self, query: str = "", user_id: Optional[str] = None, like: Optional[str] = None,
-                       kind: str = "any", max_minutes: Optional[int] = None, include_watched: bool = False,
-                       limit: int = 6, exclude: frozenset = frozenset()) -> dict:
+                       kind: str = "any", availability: str = "anywhere", max_minutes: Optional[int] = None,
+                       include_watched: bool = False, limit: int = 6, exclude: frozenset = frozenset()) -> dict:
         """
         Ranks titles by how well they match `query`: the text match, averaged with the share of the genres the query
         asks for that a title has (GENRE_WORDS: "funny" asks for Comedy). With `like`, that's averaged with the
@@ -222,7 +238,7 @@ class LibraryTools:
         of it from one call rather than having to merge tool results itself.
         `max_minutes` leaves out titles that are longer, or whose length isn't known.
         """
-        mask = self._mask(user_id, kind, include_watched, exclude)
+        mask = self._mask(user_id, kind, include_watched, exclude, availability)
         if max_minutes:
             mask &= (self.titles["minutes"] <= int(max_minutes)).fillna(False).to_numpy(dtype=bool)
         ids, out = self._ids[mask], {}
@@ -254,20 +270,21 @@ class LibraryTools:
         return {**out, "results": results}
 
     def similar_titles(self, title: str, user_id: Optional[str] = None, kind: str = "any",
-                       include_watched: bool = False, limit: int = 6, exclude: frozenset = frozenset()) -> dict:
+                       availability: str = "anywhere", include_watched: bool = False, limit: int = 6,
+                       exclude: frozenset = frozenset()) -> dict:
         try:
             t_const, others = self._resolve(title)
         except ValueError:
-            # not a title the server has or had: compared by its details instead, if it can be looked up
+            # not a title we have details of: compared by its looked-up details instead, if it can be looked up
             if self._lookup(title) is None:
                 raise
-            out = self.search_library(user_id=user_id, like=title, kind=kind, include_watched=include_watched,
-                                      limit=limit, exclude=exclude)
+            out = self.search_library(user_id=user_id, like=title, kind=kind, availability=availability,
+                                      include_watched=include_watched, limit=limit, exclude=exclude)
             return {"similar_to": out.pop("like"), **out}
-        knn = self.rec.knn
+        knn = self.knn
         if t_const not in knn:
             return {"error": f"{self.titles.loc[t_const, 'primary_name']} has no features to compare"}
-        allowed = self.titles.index[self._mask(user_id, kind, include_watched, exclude)]
+        allowed = self.titles.index[self._mask(user_id, kind, include_watched, exclude, availability)]
         recs = knn.recommend(t_const, n=self._limit(limit), allowed=allowed)
         taste = self._taste_fit(user_id)
         results = [{**self._summary(t, user_id, taste), "in_common": shared[:5]}
@@ -283,7 +300,7 @@ class LibraryTools:
             people = self._people(d["people"], cast=INFO_CAST)
             return {
                 "title": f"{d['title']} ({d['year']})" if d["year"] else d["title"], "type": d["kind"],
-                "on_server": False, "note": "the server has never had it: they can request it in Jellyseerr",
+                "on_server": False, "note": "not on the server: they can request it in Jellyseerr",
                 "genres": d["genres"], "keywords": d["keywords"][:15],
                 "crew": [f"{p['name']} ({p['role']})" for p in people if p["role"] != "cast"],
                 "cast": [p["name"] for p in people if p["role"] == "cast"],
@@ -298,6 +315,8 @@ class LibraryTools:
             "cast": [p["name"] for p in people if p["role"] == "cast"],
             "about": r["overview"],
         }
+        if not r["on_server"]:
+            out["note"] = "not on the server: they can request it in Jellyseerr"
         if pd.notna(r["avg_rating"]):
             out["imdb_rating"] = float(r["avg_rating"])
         out.update(self._length(t_const))
@@ -381,7 +400,7 @@ class LibraryTools:
         """
         For search's `like`: how similar each allowed title is to it (scaled to the best match; None if it can't be
         compared), what to call it in the result, and a function giving what each of some titles has in common with
-        it. A title the server has or had is compared by `ContentKNN` (and left out of the similarities); any other
+        it. A title we have details of is compared by `ContentKNN` (and left out of the similarities); any other
         by the text match to its looked-up details, without its name (so "The Boys" isn't like "Trailer Park Boys").
         """
         ids = self._ids[mask]
@@ -397,8 +416,8 @@ class LibraryTools:
                 return [[w for w in [*_list(self.titles.at[t, "keywords"]), *_list(self.titles.at[t, "genres"])]
                          if w.casefold() in theirs] for t in titles]
             name = f"{d['title']} ({d['year']})" if d["year"] else d["title"]
-            return self._scaled(similarity), f"{name} - not on the server, compared by its genres, keywords and plot", shared
-        knn = self.rec.knn
+            return self._scaled(similarity), f"{name} - compared by its genres, keywords and plot", shared
+        knn = self.knn
         if seed not in knn:
             return None, f"{self._name(seed)} has no features to compare", None
         candidates = [t for t in ids if t in knn and t != seed]
@@ -440,15 +459,18 @@ class LibraryTools:
             close = difflib.get_close_matches(name, t["norm"].unique().tolist(), n=3, cutoff=0.8)
             hits = t[t["norm"].isin(close)]
         if hits.empty:
-            raise ValueError(f"'{title}' isn't a title the server has or had; describe it to search_library instead")
+            raise ValueError(f"no title called '{title}' found; describe it to search_library instead")
         hits = hits.assign(
             year_match=(hits["year"] == int(year.group(1))).fillna(False) if year else False,
             votes=hits["num_votes"].fillna(0),
         ).sort_values(["year_match", "on_server", "votes"], ascending=False)
         return hits.index[0], [self._name(o) for o in hits.index[1:4]]
 
-    def _mask(self, user_id: Optional[str], kind: str, include_watched: bool, exclude: Iterable[str] = ()) -> np.ndarray:
-        mask = self.titles["on_server"].to_numpy().copy()
+    def _mask(self, user_id: Optional[str], kind: str, include_watched: bool, exclude: Iterable[str] = (),
+              availability: str = "anywhere") -> np.ndarray:
+        on_server = self.titles["on_server"].to_numpy()
+        mask = on_server.copy() if availability == "on_server" else ~on_server if availability == "not_on_server" \
+            else np.ones(len(self.titles), dtype=bool)
         if kind in ("movie", "show"):
             mask &= (self.titles["kind"] == kind).to_numpy()
         if not include_watched and user_id is not None:
@@ -459,23 +481,22 @@ class LibraryTools:
 
     def _seen(self, user_id: str) -> list[str]:
         try:
-            return self.rec.profiles.seen_by(user_id)
+            return self.profiles.seen_by(user_id)
         except KeyError:
             return []
 
     def _history(self, user_id: Optional[str]) -> pd.DataFrame:
-        h = self.rec.profiles.history
+        h = self.profiles.history
         return h[h["user_id"] == user_id] if user_id is not None else h.iloc[0:0]
 
     def _taste_fit(self, user_id: Optional[str]) -> Optional[pd.Series]:
-        """Percentile (0-100) of each server title's similarity to the user's taste, among server titles"""
+        """Percentile (0-100) of each title's similarity to the user's taste, among all titles"""
         if user_id is None:
             return None
         try:
-            similarity = self.rec.profiles.taste_similarity(user_id)
+            similarity = self.profiles.taste_similarity(user_id)
         except (KeyError, ValueError):
             return None
-        similarity = similarity[similarity.index.isin(self.library)]
         return (similarity.rank(pct=True) * 100).round(0)
 
     def _length(self, t_const: str) -> dict:
@@ -501,11 +522,13 @@ class LibraryTools:
         r = self.titles.loc[t_const]
         about = str(r["overview"] or "")
         out = {
-            "title": self._name(t_const), "type": r["kind"], "genres": list(r["genres"] or [])[:3],
-            "keywords": list(r["keywords"] or [])[:LIST_KEYWORDS],
+            "title": self._name(t_const), "type": r["kind"], "on_server": bool(r["on_server"]),
+            "genres": list(r["genres"] or [])[:3], "keywords": list(r["keywords"] or [])[:LIST_KEYWORDS],
             "about": about if len(about) <= ABOUT_CHARS else about[:ABOUT_CHARS].rsplit(" ", 1)[0] + "...",
             **self._length(t_const),
         }
+        if pd.notna(r["avg_rating"]):
+            out["imdb_rating"] = float(r["avg_rating"])
         if user_id is not None and t_const in self._seen(user_id):
             out["you_watched"] = True
         if taste is not None and t_const in taste.index:

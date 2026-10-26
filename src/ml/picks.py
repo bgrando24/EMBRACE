@@ -36,12 +36,15 @@ class Recommender:
     requests: Requests
     # `PreProcess.get_title_content()` rows (overviews, keywords, people) - None when the genre model was used
     content: Optional[pd.DataFrame] = None
+    # the same for titles beyond the library (`load(discovery=True)`, for the chat-bot): never in picks
+    discovery: Optional[pd.DataFrame] = None
 
     @classmethod
-    def load(cls, pp: PreProcess, log: Callable[[str], None] = print) -> "Recommender":
+    def load(cls, pp: PreProcess, log: Callable[[str], None] = print, discovery: bool = False) -> "Recommender":
         """
         Builds the default model: ContentKNN (with MovieLens when downloaded), falling back to GenreKNN when no TMDB
-        details have been fetched yet. Profiles include titles Emby has marked played.
+        details have been fetched yet. Profiles include titles Emby has marked played. With `discovery`, the content
+        of titles beyond the library is loaded too (as `discovery`); the model is the library's either way.
         """
         titles = pp.imdb_get_encoded_genres()
         try:
@@ -49,9 +52,11 @@ class Recommender:
         except FileNotFoundError:
             log("MovieLens not downloaded (scripts/movielens/download_movielens.sh), its block stays empty")
             movielens = None
-        content = None
+        content = extra = None
         try:
-            content = pp.get_title_content(titles, movielens)
+            content = pp.get_title_content(titles, movielens, discovery=discovery)
+            library = content["in_library"].astype(bool)
+            content, extra = content[library].reset_index(drop=True), (content[~library].reset_index(drop=True) if discovery else None)
             knn: CosineKNN = ContentKNN(content)
         except ValueError as e:
             log(f"Content model unavailable ({e}), using the genre model")
@@ -65,6 +70,7 @@ class Recommender:
             freshness=Freshness(pp.get_title_additions()),
             requests=Requests(pp.get_user_requests()),
             content=content,
+            discovery=extra,
         )
 
     def eligible_users(self, min_titles: int = MIN_PROFILE_TITLES) -> pd.DataFrame:

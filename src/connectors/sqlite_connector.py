@@ -1201,16 +1201,18 @@ class SQLiteConnector:
         so a dead ID isn't retried until it's due for a refresh.
 
         Also `tmdb_imdb_lookups`: IMDB ID -> TMDB title found with TMDB's /find (tmdb_id NULL = not found), used for
-        episodes whose show has no TMDB link in the library (it was removed, or Emby IDs changed on the rebuild).
+        episodes whose show has no TMDB link in the library (it was removed, or Emby IDs changed on the rebuild); and
+        `tmdb_discovery_lookups`, the same for popular IMDB titles (see `ingest_tmdb_discovery_details`).
         """
         try:
-            self._connection.execute("""
-                CREATE TABLE IF NOT EXISTS tmdb_imdb_lookups(
-                    imdb_id TEXT PRIMARY KEY,
-                    media_type TEXT,
-                    tmdb_id INTEGER,
-                    looked_up_at TEXT NOT NULL
-                )""")
+            for table in ("tmdb_imdb_lookups", "tmdb_discovery_lookups"):
+                self._connection.execute(f"""
+                    CREATE TABLE IF NOT EXISTS {table}(
+                        imdb_id TEXT PRIMARY KEY,
+                        media_type TEXT,
+                        tmdb_id INTEGER,
+                        looked_up_at TEXT NOT NULL
+                    )""")
             self._connection.execute("""
                 CREATE TABLE IF NOT EXISTS tmdb_title_details(
                     media_type TEXT NOT NULL,
@@ -1264,29 +1266,117 @@ class SQLiteConnector:
         if self._connection is None or not self._ensure_tmdb_title_details_schema():
             return -1
 
-        type_case = " ".join(f"WHEN '{emby}' THEN '{tmdb}'" for emby, tmdb in self.TMDB_MEDIA_TYPES.items())
         cutoff = (datetime.now() - timedelta(days=max_age_days)).strftime("%Y-%m-%d %H:%M:%S")
         if find_by_imdb_id_func is not None:
             self._lookup_unlinked_shows(find_by_imdb_id_func, cutoff)
+        library, params = self._library_tmdb_titles()
         due = self._connection.execute(f"""
-            WITH targets AS (
-                SELECT CASE l.item_type {type_case} END AS media_type, CAST(p.provider_item_id AS INTEGER) AS tmdb_id
-                FROM library_items l
-                JOIN item_provider_ids p ON p.item_id = l.item_id AND p.provider = 'tmdb'
-                WHERE l.item_type IN ({",".join("?" * len(self.TMDB_MEDIA_TYPES))})
-                UNION
-                SELECT media_type, tmdb_id FROM tmdb_imdb_lookups WHERE tmdb_id IS NOT NULL
-            )
+            WITH targets AS ({library})
             SELECT t.media_type, t.tmdb_id, d.fetched_at
             FROM targets t
             LEFT JOIN tmdb_title_details d ON d.media_type = t.media_type AND d.tmdb_id = t.tmdb_id
             WHERE t.tmdb_id > 0 AND (d.fetched_at IS NULL OR d.fetched_at < ? OR (d.found = 1 AND d.recommendations IS NULL))
             ORDER BY d.fetched_at IS NOT NULL, d.fetched_at, t.media_type, t.tmdb_id
-        """, [*self.TMDB_MEDIA_TYPES, cutoff]).fetchall()
-        due = due[:limit] if limit is not None else due
+        """, [*params, cutoff]).fetchall()
+        return self._fetch_tmdb_details(due[:limit] if limit is not None else due, fetch_title_details_func)
+
+    # popular IMDB titles (by votes) that `ingest_tmdb_discovery_details` adds to TMDB's recommendations
+    DISCOVERY_MIN_VOTES = 25_000
+
+    def ingest_tmdb_discovery_details(
+        self,
+        fetch_title_details_func: Callable[[str, int], Optional[dict]],
+        find_by_imdb_id_func: Optional[Callable[[str], Optional[tuple[str, int]]]] = None,
+        popular_imdb_ids: Iterable[str] = (),
+        max_age_days: int = 180,
+        limit: Optional[int] = None,
+    ) -> int:
+        """
+        Fetches TMDB details for titles beyond the library, so the chat-bot can recommend what the server doesn't have:
+        every title TMDB recommends for a library title ("people who liked this also liked", stored by
+        `ingest_tmdb_title_details`), and popular IMDB titles (`popular_imdb_ids`, looked up with
+        `find_by_imdb_id_func`, once each). Only the library's recommendations count, not these titles' own, so the set
+        doesn't keep growing. Stored in `tmdb_title_details` like the library's (`get_tmdb_title_details`' in_library
+        tells them apart); titles with none yet go first.
+
+        Args:
+            fetch_title_details_func: e.g. `TMDBConnector.fetch_title_details`
+            find_by_imdb_id_func (optional): e.g. `TMDBConnector.find_by_imdb_id`, for `popular_imdb_ids`
+            popular_imdb_ids (optional): IMDB IDs to include, e.g. titles with DISCOVERY_MIN_VOTES votes
+            max_age_days (int, optional): Re-fetch details older than this - DEFAULT: 180 (they change little)
+            limit (int, optional): At most this many lookups, and this many fetches, this run
+
+        Returns:
+            int: number of titles fetched (including 404s), or -1 if there was work to do and every fetch failed
+        """
+        if self._connection is None or not self._ensure_tmdb_title_details_schema():
+            return -1
+        cutoff = (datetime.now() - timedelta(days=max_age_days)).strftime("%Y-%m-%d %H:%M:%S")
+
+        if find_by_imdb_id_func is not None:
+            # an IMDB ID's TMDB title doesn't change: each is looked up once
+            done = {r[0] for r in self._connection.execute("SELECT imdb_id FROM tmdb_discovery_lookups")}
+            todo = [i for i in dict.fromkeys(popular_imdb_ids) if i not in done]
+            for n, imdb_id in enumerate(todo[:limit] if limit is not None else todo, start=1):
+                try:
+                    found = find_by_imdb_id_func(imdb_id)
+                except Exception as e:
+                    print(f"[SQLiteConnector] WARN: TMDB lookup failed for {imdb_id}: {e}", file=sys.stderr)
+                    continue
+                self._connection.execute(
+                    "INSERT OR REPLACE INTO tmdb_discovery_lookups VALUES (?, ?, ?, ?)",
+                    (imdb_id, *(found or (None, None)), datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+                )
+                if n % 200 == 0:
+                    self._connection.commit()
+                    if self._debug: print(f"[SQLiteConnector] TMDB discovery lookups: {n}/{len(todo)}")
+            self._connection.commit()
+
+        library, params = self._library_tmdb_titles()
+        due = self._connection.execute(f"""
+            WITH library AS ({library}),
+            recommended AS (
+                SELECT substr(j.value, 1, instr(j.value, ':') - 1) AS media_type,
+                       CAST(substr(j.value, instr(j.value, ':') + 1) AS INTEGER) AS tmdb_id
+                FROM tmdb_title_details d
+                JOIN library l ON l.media_type = d.media_type AND l.tmdb_id = d.tmdb_id,
+                     json_each(d.recommendations) j
+                WHERE d.found = 1 AND d.recommendations IS NOT NULL
+            ),
+            targets AS (
+                SELECT media_type, tmdb_id FROM recommended
+                UNION
+                SELECT media_type, tmdb_id FROM tmdb_discovery_lookups WHERE tmdb_id IS NOT NULL
+                EXCEPT
+                SELECT media_type, tmdb_id FROM library
+            )
+            SELECT t.media_type, t.tmdb_id, d.fetched_at
+            FROM targets t
+            LEFT JOIN tmdb_title_details d ON d.media_type = t.media_type AND d.tmdb_id = t.tmdb_id
+            WHERE t.tmdb_id > 0 AND t.media_type IN ('movie', 'tv') AND (d.fetched_at IS NULL OR d.fetched_at < ?)
+            ORDER BY d.fetched_at IS NOT NULL, d.fetched_at, t.media_type, t.tmdb_id
+        """, [*params, cutoff]).fetchall()
+        return self._fetch_tmdb_details(due[:limit] if limit is not None else due, fetch_title_details_func)
+
+    def _library_tmdb_titles(self) -> tuple[str, list]:
+        """
+        A SELECT of (media_type, tmdb_id) for the TMDB titles of the library's movies and series, including removed ones
+        and shows only found through their episodes (`tmdb_imdb_lookups`), and its parameters
+        """
+        type_case = " ".join(f"WHEN '{emby}' THEN '{tmdb}'" for emby, tmdb in self.TMDB_MEDIA_TYPES.items())
+        return f"""
+            SELECT CASE l.item_type {type_case} END AS media_type, CAST(p.provider_item_id AS INTEGER) AS tmdb_id
+            FROM library_items l
+            JOIN item_provider_ids p ON p.item_id = l.item_id AND p.provider = 'tmdb'
+            WHERE l.item_type IN ({",".join("?" * len(self.TMDB_MEDIA_TYPES))})
+            UNION
+            SELECT media_type, tmdb_id FROM tmdb_imdb_lookups WHERE tmdb_id IS NOT NULL
+        """, list(self.TMDB_MEDIA_TYPES)
+
+    def _fetch_tmdb_details(self, due: list, fetch_title_details_func: Callable[[str, int], Optional[dict]]) -> int:
+        """Fetches and stores the details of `due` (media_type, tmdb_id, ...) rows; returns as the ingest methods do"""
         if not due:
             return 0
-
         fetched = failed = 0
         for i, (media_type, tmdb_id, _) in enumerate(due, start=1):
             try:
@@ -1350,12 +1440,16 @@ class SQLiteConnector:
     def get_tmdb_title_details(self) -> pd.DataFrame:
         """
         Returns the found TMDB title details, with list columns decoded, plus `emby_imdb_id`: the IMDB ID Emby has for
-        the same title (preferred over TMDB's own `imdb_id`, since it's what watch history is linked through)
+        the same title (preferred over TMDB's own `imdb_id`, since it's what watch history is linked through), and
+        `in_library`: whether it's a library title (on the server, or once was), rather than one fetched by
+        `ingest_tmdb_discovery_details`
         """
         if self._connection is None or not self._ensure_tmdb_title_details_schema():
             return pd.DataFrame()
         type_case = " ".join(f"WHEN '{emby}' THEN '{tmdb}'" for emby, tmdb in self.TMDB_MEDIA_TYPES.items())
+        library, params = self._library_tmdb_titles()
         df = pd.read_sql_query(f"""
+            WITH library AS ({library})
             SELECT d.*, (
                 SELECT MIN(imdb.provider_item_id)
                 FROM item_provider_ids tmdb
@@ -1363,12 +1457,14 @@ class SQLiteConnector:
                 JOIN item_provider_ids imdb ON imdb.item_id = tmdb.item_id AND imdb.provider = 'imdb'
                 WHERE tmdb.provider = 'tmdb' AND CAST(tmdb.provider_item_id AS INTEGER) = d.tmdb_id
                   AND CASE l.item_type {type_case} END = d.media_type
-            ) AS emby_imdb_id
+            ) AS emby_imdb_id,
+            EXISTS (SELECT 1 FROM library l WHERE l.media_type = d.media_type AND l.tmdb_id = d.tmdb_id) AS in_library
             FROM tmdb_title_details d WHERE d.found = 1
-        """, self._connection)
+        """, self._connection, params=params)
         for col in ("genres", "keywords", "people"):
             df[col] = df[col].map(json.loads)
         df["recommendations"] = df["recommendations"].map(lambda r: json.loads(r) if r else [])
+        df["in_library"] = df["in_library"].astype(bool)
         return df
 
 

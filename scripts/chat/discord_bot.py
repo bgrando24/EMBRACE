@@ -77,7 +77,7 @@ class Brain:
     def load(self) -> None:
         mtime = self.db_path.stat().st_mtime if self.db_path.exists() else 0.0
         pp = PreProcess()
-        rec = Recommender.load(pp, log=log)
+        rec = Recommender.load(pp, log=log, discovery=True)
         self.tools = LibraryTools(rec, runtimes=pp.get_title_runtimes(), lookup=self.lookup)
         try:
             self.emby_ids = {name.casefold(): uid for name, uid in EmbyConnector().get_all_emby_users().items()}

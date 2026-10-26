@@ -28,7 +28,7 @@ def main():
     args = p.parse_args()
 
     pp = PreProcess()
-    rec = Recommender.load(pp, log=lambda m: print(f"[INFO] {m}"))
+    rec = Recommender.load(pp, log=lambda m: print(f"[INFO] {m}"), discovery=True)
     users = rec.profiles.users()
     match = users[users["user_name"].str.casefold() == args.user.casefold()]
     user_id = match["user_id"].iloc[0] if len(match) else None

@@ -9,7 +9,7 @@ from chat import ChatSession, LibraryTools, LLMUnavailable, OllamaClient, tmdb_l
 from chat.session import MAX_TOOL_ROUNDS
 from connectors import TMDBConnector
 from ml import ContentKNN, Freshness, PreProcess, Recommender, Requests, UserProfiles
-from test_content_knn import CONTENT
+from test_content_knn import CONTENT, HEIST, person, title
 from test_freshness import ADDITIONS
 from test_tmdb_content import response
 from test_picks import TempDBTestCase, item, watched
@@ -25,14 +25,15 @@ OUTSIDE = {"title": "Trailer Park Boys", "year": 2001, "kind": "show", "genres":
            "overview": "two petty criminals in a trailer park"}
 
 
-def make_tools(lookup=None) -> LibraryTools:
+def make_tools(lookup=None, discovery=None) -> LibraryTools:
     knn = ContentKNN(CHAT_CONTENT)
     history = pd.DataFrame([
         {**watched("tt1"), "last_watched_timestamp": "2026-01-02 20:00:00"},
         {**watched("tt3", hours=1.0), "last_watched_timestamp": "2026-03-05 20:00:00"},
     ])
     rec = Recommender(knn=knn, profiles=UserProfiles(knn, history), library=LIBRARY, freshness=Freshness(ADDITIONS),
-                      requests=Requests(pd.DataFrame(columns=["user_id", "t_const", "requested_at"])), content=CHAT_CONTENT)
+                      requests=Requests(pd.DataFrame(columns=["user_id", "t_const", "requested_at"])), content=CHAT_CONTENT,
+                      discovery=discovery)
     return LibraryTools(rec, runtimes=pd.Series({"tt2": 95, "tt4": 140, "tt5": 22}), lookup=lookup)
 
 
@@ -45,11 +46,15 @@ class TestLibraryTools(unittest.TestCase):
     def setUp(self):
         self.tools = make_tools()
 
-    def test_search_finds_by_description_and_skips_watched_and_off_server_titles(self):
+    def test_search_finds_by_description_skips_watched_and_marks_whats_on_the_server(self):
         self.assertEqual(titles(self.tools.call("search_library", {"query": "bank heist crew"}, "u1"))[0], "Heist Two (2000)")
-        found = titles(self.tools.call("search_library", {"query": "family detective bank", "limit": 15}, "u1"))
-        self.assertNotIn("Heist One (2000)", found)        # watched
-        self.assertNotIn("Korean Drama (2000)", found)     # not on the server
+        out = json.loads(self.tools.call("search_library", {"query": "family detective bank", "limit": 15}, "u1"))
+        on_server = {r["title"]: r["on_server"] for r in out["results"]}
+        self.assertNotIn("Heist One (2000)", on_server)       # watched
+        self.assertFalse(on_server["Korean Drama (2000)"])    # the server had it, and doesn't any more
+        self.assertTrue(on_server["Heist Two (2000)"])
+        only_server = titles(self.tools.call("search_library", {"query": "family detective bank", "availability": "on_server"}, "u1"))
+        self.assertNotIn("Korean Drama (2000)", only_server)
         with_watched = titles(self.tools.call("search_library", {"query": "bank", "include_watched": True}, "u1"))
         self.assertIn("Heist One (2000)", with_watched)
 
@@ -62,7 +67,7 @@ class TestLibraryTools(unittest.TestCase):
         self.assertIn("heist", out["results"][0]["in_common"])
         # an unknown `like` is reported, and the text search still runs
         out = json.loads(self.tools.call("search_library", {"query": "funny", "like": "Nope Nothing"}, "u1"))
-        self.assertIn("isn't a title", out["like"])
+        self.assertIn("no title called", out["like"])
         self.assertTrue(out["results"])
 
     def test_genre_words_in_the_query_rank_that_genre_first(self):
@@ -78,7 +83,7 @@ class TestLibraryTools(unittest.TestCase):
         lookup = mock.Mock(side_effect=lambda t: OUTSIDE if t == "Trailer Park Boys" else None)
         tools = make_tools(lookup)
         out = json.loads(tools.call("search_library", {"query": "", "like": "Trailer Park Boys"}, "u1"))
-        self.assertIn("Trailer Park Boys (2001) - not on the server", out["like"])
+        self.assertIn("Trailer Park Boys (2001) - compared by", out["like"])
         self.assertEqual(out["results"][0]["title"], "Sitcom (2000)")     # sitcom, Comedy
         self.assertEqual(out["results"][0]["in_common"], ["sitcom", "Comedy"])
         similar = json.loads(tools.call("similar_titles", {"title": "Trailer Park Boys"}, "u1"))
@@ -93,6 +98,21 @@ class TestLibraryTools(unittest.TestCase):
         self.assertIn("error", json.loads(tools.call("title_info", {"title": "Nope Nothing"}, "u1")))
         lookup.side_effect = ConnectionError()
         self.assertIn("error", json.loads(tools.call("title_info", {"title": "Trailer Park Boys"}, "u1")))
+
+    def test_titles_beyond_the_library_are_recommended_and_marked(self):
+        extra = pd.DataFrame([title("tt9", "Heist Three", 30, ["Crime"], HEIST, [person(1, "Star")],
+                                    "the crew plans a third bank job")])
+        tools = make_tools(discovery=extra)
+        out = json.loads(tools.call("search_library", {"query": "crew bank job"}, "u1"))
+        on_server = {r["title"]: r["on_server"] for r in out["results"]}
+        self.assertEqual((on_server["Heist Three (2000)"], on_server["Heist Two (2000)"]), (False, True))
+        args = {"query": "crew bank job", "availability": "not_on_server"}
+        self.assertEqual(titles(tools.call("search_library", args, "u1")), ["Heist Three (2000)"])
+        # similar titles cross over; the daily picks' model stays the library's
+        self.assertIn("Heist Three (2000)", titles(tools.call("similar_titles", {"title": "Heist One"}, "u1")))
+        self.assertIn("tt9", tools.knn)
+        self.assertNotIn("tt9", tools.rec.knn)
+        self.assertIn("Jellyseerr", json.loads(tools.call("title_info", {"title": "Heist Three"}, "u1"))["note"])
 
     def test_already_suggested_titles_are_left_out(self):
         out = json.loads(self.tools.call("search_library", {"query": "funny"}, "u1", exclude={"Sitcom (2000)"}))
@@ -129,7 +149,7 @@ class TestLibraryTools(unittest.TestCase):
         self.assertEqual(out["similar_to"], "Heist One (2000)")
         self.assertEqual(out["results"][0]["title"], "Heist Two (2000)")
         self.assertIn("heist", out["results"][0]["in_common"])
-        self.assertNotIn("Korean Drama (2000)", [r["title"] for r in out["results"]])
+        self.assertTrue(all(r["on_server"] for r in out["results"] if r["title"] != "Korean Drama (2000)"))
 
     def test_history_orders(self):
         recent = titles(self.tools.call("my_watch_history", {"order": "recent"}, "u1"))

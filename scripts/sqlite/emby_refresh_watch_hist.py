@@ -1,4 +1,5 @@
 from connectors import SQLiteConnector, EmbyConnector, TMDBConnector, JellyseerrConnector
+from ml import PreProcess
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -29,6 +30,8 @@ SQLITE_DIR.mkdir(parents=True, exist_ok=True)
 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
 SQLITE_DB_NAME = os.getenv("SQLITE_DB_NAME") or "EMBRACE_SQLITE_DB.db"
 WORKING_DB_NAME = f"{SQLITE_DB_NAME}.building"
+# TMDB fetches (and as many lookups) per run for titles beyond the library: ~15 min at most
+DISCOVERY_PER_RUN = 3000
 
 db_path = SQLITE_DIR / SQLITE_DB_NAME
 working_path = SQLITE_DIR / WORKING_DB_NAME
@@ -97,6 +100,22 @@ try:
         tmdb_details = -1
         print(f"[WARN] TMDB title details fetch failed ({e}), continuing with existing details", file=sys.stderr)
 
+    # titles beyond the library, for the chat-bot to recommend: TMDB's recommendations for library titles and popular
+    # IMDB titles. Optional, and capped per run, so a first fill spreads over a few nights
+    try:
+        pp = PreProcess(WORKING_DB_NAME)
+        imdb = pp.imdb_get_encoded_genres()     # cached; MySQL only when the cache is missing
+        pp.sqlite._connection.close()
+        popular = imdb[imdb["num_votes"].fillna(0) >= SQLiteConnector.DISCOVERY_MIN_VOTES].sort_values("num_votes", ascending=False)
+        tmdb_discovery = sqlite.ingest_tmdb_discovery_details(
+            TMDB.fetch_title_details, TMDB.find_by_imdb_id, popular["t_const"].tolist(), limit=DISCOVERY_PER_RUN)
+        del imdb, popular
+        if tmdb_discovery < 0:
+            print("[WARN] TMDB details beyond the library failed, continuing with existing details", file=sys.stderr)
+    except Exception as e:
+        tmdb_discovery = -1
+        print(f"[WARN] TMDB details beyond the library failed ({e}), continuing with existing details", file=sys.stderr)
+
     # Emby's own per-user state (played flags, favourites): a snapshot, optional
     item_states = sqlite.ingest_user_item_states(Emby.get_all_emby_users, Emby.get_user_item_states)
     if item_states < 0:
@@ -145,6 +164,7 @@ lines = [
     f"Cron job: Emby watch history refresh finished at {finished_at}",
     f"New watch events: {new_events}",
     f"TMDB title details fetched: {status(tmdb_details)}",
+    f"TMDB details beyond the library: {status(tmdb_discovery)}",
     f"Emby user item states: {status(item_states)}",
 ]
 if jellyseerr_requests is not None:

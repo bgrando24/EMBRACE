@@ -9,8 +9,8 @@ import pandas as pd
 import scipy.sparse as sp
 from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS, TfidfVectorizer
 
-from ml import ContentKNN, Recommender, UserProfiles
-from ml.picks import BACK_CATALOGUE, FRESH
+from ml import Recommender
+from ml.picks import BACK_CATALOGUE, FRESH, TO_REQUEST
 
 # IMDB title types shown to the LLM as "show"; everything else (movie, tvMovie, ...) is a "movie"
 SHOW_TYPES = {"tvSeries", "tvMiniSeries"}
@@ -118,14 +118,9 @@ class LibraryTools:
         self.rec = rec
         self.lookup = lookup
         self.library = set(library if library is not None else rec.library)
-        if rec.discovery is not None and len(rec.discovery):
-            # a model over the library and the titles beyond it, so they can be similar to each other; the daily
-            # picks keep the library-only `rec.knn`
-            content = pd.concat([rec.content, rec.discovery], ignore_index=True)
-            self.knn = ContentKNN(content)
-            self.profiles = UserProfiles(self.knn, rec.profiles.history)
-        else:
-            content, self.knn, self.profiles = rec.content, rec.knn, rec.profiles
+        # library + titles beyond it in one model, so they can be similar to each other (picks keep `rec.knn`)
+        self.knn, self.profiles = rec.wide
+        content = pd.concat([rec.content, rec.discovery], ignore_index=True) if rec.discovery is not None else rec.content
         c = content.drop_duplicates("t_const").set_index("t_const")
         year = pd.to_numeric(c["start_year"], errors="coerce").astype("Int64")
         self.titles = c.assign(
@@ -195,10 +190,11 @@ class LibraryTools:
             }),
             "my_recommendations": (self.my_recommendations, {
                 "description": "The user's personal recommendations from their watch history: 'fresh' = new on the "
-                               "server, 'back_catalogue' = older titles. Use when they ask what to watch without "
-                               "saying what they're in the mood for.",
+                               "server, 'back_catalogue' = older titles on the server, 'to_request' = titles NOT on "
+                               "the server, worth requesting. Use when they ask what to watch without saying what "
+                               "they're in the mood for.",
                 "properties": {
-                    "list": {"type": "string", "enum": [FRESH, BACK_CATALOGUE], "description": "default fresh"},
+                    "list": {"type": "string", "enum": [FRESH, BACK_CATALOGUE, TO_REQUEST], "description": "default fresh"},
                     "limit": {"type": "integer", "description": "default 6"},
                 },
                 "required": [],
@@ -351,7 +347,8 @@ class LibraryTools:
         if user_id is None:
             return {"error": "no user"}
         try:
-            picks = self.rec.picks(user_id, n=self._limit(limit) + len(exclude))
+            n = self._limit(limit) + len(exclude)
+            picks = self.rec.to_request(user_id, n=n) if list == TO_REQUEST else self.rec.picks(user_id, n=n)
         except (KeyError, ValueError):
             return {"error": "not enough watch history for personal recommendations yet; use search_library"}
         picks = picks[(picks["list"] == list) & ~picks["t_const"].map(self.titles["display"]).isin(exclude)]

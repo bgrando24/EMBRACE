@@ -130,6 +130,9 @@ class TestLibraryTools(unittest.TestCase):
         self.assertIn("tt9", tools.knn)
         self.assertNotIn("tt9", tools.rec.knn)
         self.assertIn("Jellyseerr", json.loads(tools.call("title_info", {"title": "Heist Three"}, "u1"))["note"])
+        # and personal recommendations of titles to request
+        out = json.loads(tools.call("my_recommendations", {"list": "to_request"}, "u1"))
+        self.assertEqual([(r["title"], r["on_server"]) for r in out["results"]], [("Heist Three (2000)", False)])
 
     def test_already_suggested_titles_are_left_out(self):
         out = json.loads(self.tools.call("search_library", {"query": "funny"}, "u1", exclude={"Sitcom (2000)"}))

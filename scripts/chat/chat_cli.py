@@ -11,7 +11,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from chat import ChatSession, LibraryTools, LLMUnavailable, OllamaClient
+from chat import ChatSession, LibraryTools, LLMUnavailable, OllamaClient, tmdb_lookup
+from connectors import TMDBConnector
 from ml import PreProcess, Recommender
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -34,7 +35,9 @@ def main():
     if user_id is None:
         print(f"[WARN] no watch history for {args.user}: personal tools will say so")
     llm = OllamaClient()
-    session = ChatSession(llm, LibraryTools(rec, runtimes=pp.get_title_runtimes()), user_id, args.user, log=print if args.tools else lambda _: None)
+    token = os.getenv("TMDB_READ_ACCESS_TOKEN")
+    tools = LibraryTools(rec, runtimes=pp.get_title_runtimes(), lookup=tmdb_lookup(TMDBConnector(token)) if token else None)
+    session = ChatSession(llm, tools, user_id, args.user, log=print if args.tools else lambda _: None)
 
     questions = iter(args.ask) if args.ask else None
     print(f"[INFO] {llm.model} via {llm.find_host() or 'no host yet'} - 'reset' starts over, Ctrl-D quits")

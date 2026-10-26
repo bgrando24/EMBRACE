@@ -18,8 +18,8 @@ from typing import Optional
 import discord
 from dotenv import load_dotenv
 
-from chat import ChatSession, LibraryTools, LLMUnavailable, OllamaClient
-from connectors import EmbyConnector
+from chat import ChatSession, LibraryTools, LLMUnavailable, OllamaClient, tmdb_lookup
+from connectors import EmbyConnector, TMDBConnector
 from ml import PreProcess, Recommender
 from utils import Notifications
 
@@ -64,6 +64,9 @@ class Brain:
         self.loaded_mtime = 0.0
         self.loaded_at = 0.0
         self.emby_ids: dict[str, str] = {}
+        # titles the server never had ("something like X") are looked up on TMDB; without a token, they're unknown
+        token = os.getenv("TMDB_READ_ACCESS_TOKEN")
+        self.lookup = tmdb_lookup(TMDBConnector(token)) if token else None
 
     def stale(self) -> bool:
         try:
@@ -75,7 +78,7 @@ class Brain:
         mtime = self.db_path.stat().st_mtime if self.db_path.exists() else 0.0
         pp = PreProcess()
         rec = Recommender.load(pp, log=log)
-        self.tools = LibraryTools(rec, runtimes=pp.get_title_runtimes())
+        self.tools = LibraryTools(rec, runtimes=pp.get_title_runtimes(), lookup=self.lookup)
         try:
             self.emby_ids = {name.casefold(): uid for name, uid in EmbyConnector().get_all_emby_users().items()}
         except Exception as e:     # Emby down: fall back to the names in watch history

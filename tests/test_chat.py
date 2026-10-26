@@ -5,8 +5,9 @@ from unittest import mock
 import pandas as pd
 import requests
 
-from chat import ChatSession, LibraryTools, LLMUnavailable, OllamaClient
+from chat import ChatSession, LibraryTools, LLMUnavailable, OllamaClient, tmdb_lookup
 from chat.session import MAX_TOOL_ROUNDS
+from connectors import TMDBConnector
 from ml import ContentKNN, Freshness, PreProcess, Recommender, Requests, UserProfiles
 from test_content_knn import CONTENT
 from test_freshness import ADDITIONS
@@ -18,7 +19,13 @@ CHAT_CONTENT = CONTENT.assign(type=CONTENT["type"].where(CONTENT["t_const"] != "
 LIBRARY = {"tt1", "tt2", "tt3", "tt4", "tt5", "tt7", "tt8"}
 
 
-def make_tools() -> LibraryTools:
+# a title the server never had, as `tmdb_lookup` returns it
+OUTSIDE = {"title": "Trailer Park Boys", "year": 2001, "kind": "show", "genres": ["Comedy", "Crime"],
+           "keywords": ["sitcom", "trailer park"], "people": [{"id": 7, "name": "Ricky", "role": "cast"}],
+           "overview": "two petty criminals in a trailer park"}
+
+
+def make_tools(lookup=None) -> LibraryTools:
     knn = ContentKNN(CHAT_CONTENT)
     history = pd.DataFrame([
         {**watched("tt1"), "last_watched_timestamp": "2026-01-02 20:00:00"},
@@ -26,7 +33,7 @@ def make_tools() -> LibraryTools:
     ])
     rec = Recommender(knn=knn, profiles=UserProfiles(knn, history), library=LIBRARY, freshness=Freshness(ADDITIONS),
                       requests=Requests(pd.DataFrame(columns=["user_id", "t_const", "requested_at"])), content=CHAT_CONTENT)
-    return LibraryTools(rec, runtimes=pd.Series({"tt2": 95, "tt4": 140, "tt5": 22}))
+    return LibraryTools(rec, runtimes=pd.Series({"tt2": 95, "tt4": 140, "tt5": 22}), lookup=lookup)
 
 
 def titles(result: str) -> list[str]:
@@ -57,6 +64,45 @@ class TestLibraryTools(unittest.TestCase):
         out = json.loads(self.tools.call("search_library", {"query": "funny", "like": "Nope Nothing"}, "u1"))
         self.assertIn("isn't a title", out["like"])
         self.assertTrue(out["results"])
+
+    def test_genre_words_in_the_query_rank_that_genre_first(self):
+        # "bank job" is a strong text match for Heist Two, but "funny" asks for a comedy
+        out = json.loads(self.tools.call("search_library", {"query": "funny bank job", "limit": 15}, "u1"))
+        self.assertEqual(out["genres_asked_for"], ["Comedy"])
+        found = [r["title"] for r in out["results"]]
+        self.assertEqual(set(found[:2]), {"Detective Comedy (2000)", "Sitcom (2000)"})
+        self.assertIn("Heist Two (2000)", found)
+        self.assertNotIn("genres_asked_for", json.loads(self.tools.call("search_library", {"query": "bank"}, "u1")))
+
+    def test_like_a_title_the_server_never_had_uses_its_looked_up_details(self):
+        lookup = mock.Mock(side_effect=lambda t: OUTSIDE if t == "Trailer Park Boys" else None)
+        tools = make_tools(lookup)
+        out = json.loads(tools.call("search_library", {"query": "", "like": "Trailer Park Boys"}, "u1"))
+        self.assertIn("Trailer Park Boys (2001) - not on the server", out["like"])
+        self.assertEqual(out["results"][0]["title"], "Sitcom (2000)")     # sitcom, Comedy
+        self.assertEqual(out["results"][0]["in_common"], ["sitcom", "Comedy"])
+        similar = json.loads(tools.call("similar_titles", {"title": "Trailer Park Boys"}, "u1"))
+        self.assertIn("Trailer Park Boys (2001)", similar["similar_to"])
+        self.assertEqual(similar["results"][0]["title"], "Sitcom (2000)")
+        info = json.loads(tools.call("title_info", {"title": "Trailer Park Boys"}, "u1"))
+        self.assertFalse(info["on_server"])
+        self.assertEqual((info["title"], info["cast"]), ("Trailer Park Boys (2001)", ["Ricky"]))
+        # titles the server has are never looked up; unknown titles and lookup failures are errors as before
+        tools.call("title_info", {"title": "Heist One"}, "u1")
+        self.assertNotIn(mock.call("Heist One"), lookup.mock_calls)
+        self.assertIn("error", json.loads(tools.call("title_info", {"title": "Nope Nothing"}, "u1")))
+        lookup.side_effect = ConnectionError()
+        self.assertIn("error", json.loads(tools.call("title_info", {"title": "Trailer Park Boys"}, "u1")))
+
+    def test_already_suggested_titles_are_left_out(self):
+        out = json.loads(self.tools.call("search_library", {"query": "funny"}, "u1", exclude={"Sitcom (2000)"}))
+        self.assertEqual([r["title"] for r in out["results"]], ["Detective Comedy (2000)"])
+        self.assertIn("left_out", out)
+        similar = titles(self.tools.call("similar_titles", {"title": "Heist One"}, "u1", exclude={"Heist Two (2000)"}))
+        self.assertNotIn("Heist Two (2000)", similar)
+        picks = titles(self.tools.call("my_recommendations", {"list": "back_catalogue", "limit": 2}, "u1"))
+        again = titles(self.tools.call("my_recommendations", {"list": "back_catalogue", "limit": 2}, "u1", exclude=picks))
+        self.assertFalse(set(picks) & set(again))
 
     def test_lengths_are_shown_and_filter(self):
         out = json.loads(self.tools.call("search_library", {"query": "funny detective family bank", "limit": 15}, "u1"))
@@ -162,6 +208,18 @@ class TestChatSession(unittest.TestCase):
         self.assertIsNone(llm.sent[-1][1])
         self.assertTrue(all(tools for _, tools in llm.sent[:-1]))
 
+    def test_suggested_titles_are_left_out_of_later_searches(self):
+        llm = FakeLLM([tool_call("search_library", query="funny"), {"content": "**Sitcom (2000)** - a funny family"},
+                       tool_call("search_library", query="funny"), {"content": "**Detective Comedy (2000)**"}])
+        session = ChatSession(llm, make_tools(), "u1", "Sam")
+        session.ask("something funny")
+        self.assertEqual(session.suggested, {"Sitcom (2000)"})      # Detective Comedy was found, but not suggested
+        session.ask("something else")
+        self.assertNotIn("Sitcom", llm.sent[3][0][-1]["content"])
+        self.assertEqual(session.suggested, {"Sitcom (2000)", "Detective Comedy (2000)"})
+        session.reset()
+        self.assertEqual(session.suggested, set())
+
     def test_llm_down_keeps_the_conversation(self):
         session = ChatSession(FakeLLM([LLMUnavailable("off")]), make_tools(), "u1", "Sam")
         with self.assertRaises(LLMUnavailable):
@@ -195,6 +253,30 @@ class TestOllamaClient(unittest.TestCase):
              mock.patch("chat.llm.requests.post", return_value=response(404, {"error": "model 'm' not found"})):
             with self.assertRaisesRegex(LLMUnavailable, "isn't pulled"):
                 llm.chat([])
+
+
+class TestTMDBLookup(unittest.TestCase):
+
+    def test_search_takes_the_first_movie_or_show(self):
+        tmdb = TMDBConnector("token")
+        body = {"results": [{"media_type": "person", "id": 1},
+                            {"media_type": "tv", "id": 2, "first_air_date": "2001-04-22"}]}
+        with mock.patch.object(tmdb._session, "get", return_value=response(200, body)):
+            self.assertEqual(tmdb.search_title("trailer park boys"), {"media_type": "tv", "tmdb_id": 2, "year": 2001})
+        with mock.patch.object(tmdb._session, "get", return_value=response(200, {"results": []})):
+            self.assertIsNone(tmdb.search_title("nothing"))
+
+    def test_only_close_names_count_and_answers_are_cached(self):
+        tmdb = mock.Mock()
+        tmdb.search_title.return_value = {"media_type": "tv", "tmdb_id": 2, "year": 2001}
+        tmdb.fetch_title_details.return_value = {"title": "Trailer Park Boys", "genres": ["Comedy"]}
+        lookup = tmdb_lookup(tmdb)
+        found = lookup("trailer park boys (2001)")
+        self.assertEqual((found["year"], found["kind"]), (2001, "show"))
+        lookup("Trailer Park Boys")
+        tmdb.search_title.assert_called_once_with("trailer park boys")
+        # a description passed as a title finds some other title: not a match
+        self.assertIsNone(lookup("funny canadian show"))
 
 
 if __name__ == "__main__":

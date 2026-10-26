@@ -147,6 +147,20 @@ class TMDBConnector:
             return "tv", int(d["tv_episode_results"][0]["show_id"])
         return None
 
+    def search_title(self, query: str, retries: int = 3) -> Optional[dict]:
+        """
+        TMDB's best match for a movie or show name (its multi search, ranked by relevance and popularity).
+
+        Returns:
+            {"media_type": "movie" | "tv", "tmdb_id": int, "year": int | None}, or None if nothing matches
+        """
+        d = self._get("/search/multi", {"query": query, "include_adult": "false", "language": "en-US"}, retries)
+        for r in (d or {}).get("results", []):
+            if r.get("media_type") in ("movie", "tv"):
+                year = (r.get("release_date") or r.get("first_air_date") or "")[:4]
+                return {"media_type": r["media_type"], "tmdb_id": int(r["id"]), "year": int(year) if year.isdigit() else None}
+        return None
+
     def _get(self, path: str, params: dict, retries: int) -> Optional[dict]:
         """GET a TMDB API path; None on 404, retrying rate limiting (HTTP 429) and server errors"""
         for attempt in range(retries + 1):

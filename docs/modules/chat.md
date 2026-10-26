@@ -21,8 +21,8 @@ the server, and lets a small local model give grounded answers.
 
 | Tool | What it does |
 | --- | --- |
-| `search_library` | Text search (TF-IDF, words and two-word phrases) over each title's name, genres, TMDB keywords, cast/crew and plot. For moods and descriptions. With `like` (a title the user liked), results are ranked by the average of the text match and the `ContentKNN` similarity to that title, each scaled to its best match: one call does "like X, but ...", which a small model handles much better than combining two tool results itself. |
-| `similar_titles` | `ContentKNN` neighbours of a title the server has or had (keywords, people, plot, genre, MovieLens), with what they have in common. |
+| `search_library` | Text search (TF-IDF, words and two-word phrases) over each title's name, genres, TMDB keywords, cast/crew and plot, for moods and descriptions. Words that ask for a genre ("funny", "comedy", "scary", "thriller", "sci-fi"...: `GENRE_WORDS`) also count: the share of those genres a title has is averaged with the text match, so "funny small town show" gives comedies, not every show that mentions a small town. With `like` (a title the user liked), that's averaged with the similarity to the `like` title, each scaled to its best match: one call does "like X, but ...", which a small model handles much better than combining two tool results itself. |
+| `similar_titles` | `ContentKNN` neighbours of a title (keywords, people, plot, genre, MovieLens), with what they have in common. |
 | `title_info` | One title's plot, genres, keywords, crew and cast, whether it's on the server, and whether you've watched it. |
 | `my_recommendations` | Your daily picks (`Recommender.picks()`): `fresh` or `back_catalogue`. |
 | `my_watch_history` | What you watched most, or most recently. |
@@ -36,8 +36,17 @@ the title is to your taste profile, as a percentile of the library. Search and s
 watched unless asked. Titles are matched the way people type them (any case, with or without "The", small typos,
 an optional year in brackets).
 
+**Titles the server never had.** "Something like X" shouldn't depend on the server having had X. When a title isn't
+in the library, it's looked up on TMDB (`TMDBConnector.search_title`, `chat.tmdb_lookup`; needs
+`TMDB_READ_ACCESS_TOKEN`, as the nightly refresh does): `like` and `similar_titles` then compare it by the text match
+to its genres, keywords, people and plot (not its name, so "The Boys" isn't like "Trailer Park Boys"), and
+`title_info` describes it and suggests requesting it. A TMDB match whose name isn't close to the one asked for is
+ignored, so a description passed as a title doesn't turn into some other film.
+
 A conversation keeps its last 6 exchanges for follow-ups ("something shorter?", "I've seen that one"), and starts
-afresh after 2 hours idle or when you send `reset`. A question may take up to 5 rounds of tool calls.
+afresh after 2 hours idle or when you send `reset`. It also remembers the titles it has suggested (those in bold in
+its answers), and search, similar titles and recommendations leave them out: told "those aren't funny enough", a
+small model otherwise searches with nearly the same words and offers the same titles, whatever its prompt says. A question may take up to 5 rounds of tool calls.
 
 ## The LLM: `scripts/llm/llm.sh`
 

@@ -30,7 +30,7 @@ SQLITE_DIR.mkdir(parents=True, exist_ok=True)
 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
 SQLITE_DB_NAME = os.getenv("SQLITE_DB_NAME") or "EMBRACE_SQLITE_DB.db"
 WORKING_DB_NAME = f"{SQLITE_DB_NAME}.building"
-# TMDB fetches (and as many lookups) per run for titles beyond the library: ~15 min at most
+# TMDB fetches (and as many lookups) per run for titles beyond the library: ~25 min at most (~0.25 s per request)
 DISCOVERY_PER_RUN = 3000
 
 db_path = SQLITE_DIR / SQLITE_DB_NAME
@@ -104,12 +104,10 @@ try:
     # IMDB titles. Optional, and capped per run, so a first fill spreads over a few nights
     try:
         pp = PreProcess(WORKING_DB_NAME)
-        imdb = pp.imdb_get_encoded_genres()     # cached; MySQL only when the cache is missing
+        popular = pp.get_popular_imdb_ids(SQLiteConnector.DISCOVERY_MIN_VOTES)   # IMDB cache; MySQL only without it
         pp.sqlite._connection.close()
-        popular = imdb[imdb["num_votes"].fillna(0) >= SQLiteConnector.DISCOVERY_MIN_VOTES].sort_values("num_votes", ascending=False)
         tmdb_discovery = sqlite.ingest_tmdb_discovery_details(
-            TMDB.fetch_title_details, TMDB.find_by_imdb_id, popular["t_const"].tolist(), limit=DISCOVERY_PER_RUN)
-        del imdb, popular
+            TMDB.fetch_title_details, TMDB.find_by_imdb_id, popular, limit=DISCOVERY_PER_RUN)
         if tmdb_discovery < 0:
             print("[WARN] TMDB details beyond the library failed, continuing with existing details", file=sys.stderr)
     except Exception as e:

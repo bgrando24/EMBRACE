@@ -88,6 +88,12 @@ class PreProcess:
         return encoded
 
 
+    def get_popular_imdb_ids(self, min_votes: int) -> list[str]:
+        """IMDB IDs of movies and shows with at least `min_votes` votes, most voted first (from `imdb_get_encoded_genres`)"""
+        t = self.imdb_get_encoded_genres()
+        return t[t["num_votes"].fillna(0) >= min_votes].sort_values("num_votes", ascending=False)["t_const"].tolist()
+
+
     @staticmethod
     def encode_title_genres(data: pd.DataFrame) -> pd.DataFrame:
         """

@@ -80,7 +80,7 @@ class TestToRequest(unittest.TestCase):
         self.rec = Recommender(
             knn=knn, profiles=UserProfiles(knn, history), library=set(library["t_const"]),
             freshness=Freshness(ADDITIONS), requests=Requests(requests), content=library,
-            discovery=CONTENT[CONTENT["t_const"].isin(self.BEYOND)].reset_index(drop=True),
+            discovery=CONTENT[CONTENT["t_const"].isin(self.BEYOND)].assign(num_votes=50_000).reset_index(drop=True),
         )
 
     def test_only_titles_beyond_the_server_not_yet_requested(self):
@@ -89,6 +89,13 @@ class TestToRequest(unittest.TestCase):
         self.assertTrue(set(out["t_const"]) <= self.BEYOND - {"tt7"})   # tt7: someone requested it already
         self.assertEqual(out["rank"].tolist(), list(range(1, len(out) + 1)))
         self.assertEqual(set(out["list"]), {TO_REQUEST})
+
+    def test_poorly_rated_or_little_known_titles_are_left_out(self):
+        d = self.rec.discovery
+        self.rec.discovery = d.assign(avg_rating=d["avg_rating"].where(d["t_const"] != "tt2", 5.0))
+        self.assertNotIn("tt2", set(self.rec.to_request("u1")["t_const"]))
+        self.rec.discovery = d.assign(num_votes=d["num_votes"].where(d["t_const"] != "tt2", 800))
+        self.assertNotIn("tt2", set(self.rec.to_request("u1")["t_const"]))
 
     def test_picks_add_them_as_a_third_list_and_keep_the_others_on_the_server(self):
         picks = self.rec.picks("u1", n=3, when="2026-03-01", n_request=2)

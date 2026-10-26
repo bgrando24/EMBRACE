@@ -163,6 +163,21 @@ class TestIngestTMDBDiscoveryDetails(TMDBDetailsTestCase):
         self.assertEqual(everything["in_library"].to_dict(),
                          {"tt-tmdb-500": False, "tt-tmdb-900": False, "tt1": True, "tt2": True})
 
+    def test_titles_beyond_the_library_of_the_wrong_kind_are_left_out(self):
+        # TMDB has junk "movie" entries claiming the IMDB ID of a series: their details describe something else
+        self.db.ingest_tmdb_discovery_details(self.tmdb.fetch, self.tmdb.find, ["tt-pop"])
+        imdb = PreProcess.encode_title_genres(pd.DataFrame([
+            {"t_const": t, "primary_name": t, "type": kind, "start_year": "2001", "avg_rating": 7.0, "num_votes": 10,
+             "genre": "Drama"} for t, kind in [("tt-tmdb-500", "tvSeries"), ("tt-tmdb-900", "movie"), ("tt1", "tvSeries")]
+        ]))
+        pp = PreProcess("test.db")
+        try:
+            c = pp.get_title_content(imdb, discovery=True)
+        finally:
+            pp.sqlite._connection.close()
+        # 500 is a TMDB movie but an IMDB series; the library's own titles are kept whatever IMDB says
+        self.assertEqual(sorted(c["t_const"]), ["tt-tmdb-900", "tt1", "tt2"])
+
 
 class TestGetTitleContent(TMDBDetailsTestCase):
 
@@ -234,6 +249,12 @@ class TestTMDBConnectorParsing(unittest.TestCase):
         self.assertIsNone(self.tmdb.fetch_title_details("movie", 1))
         self.tmdb._session.get.side_effect = [response(429, headers={"Retry-After": "0"}), response(200, {"movie_results": [{"id": 3}]})]
         self.assertEqual(self.tmdb.find_by_imdb_id("tt3"), ("movie", 3))
+
+    def test_find_prefers_the_entry_with_the_most_votes(self):
+        self.tmdb._session.get.return_value = response(200, {
+            "movie_results": [{"id": 1798468, "vote_count": 0, "popularity": 0.1}],
+            "tv_results": [{"id": 61888, "vote_count": 900, "popularity": 30.0}]})
+        self.assertEqual(self.tmdb.find_by_imdb_id("tt3230454"), ("tv", 61888))
 
     def test_find_episode_resolves_to_its_show(self):
         self.tmdb._session.get.return_value = response(200, {"movie_results": [], "tv_results": [], "tv_episode_results": [{"id": 9, "show_id": 44}]})

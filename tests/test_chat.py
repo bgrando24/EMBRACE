@@ -117,7 +117,7 @@ class TestLibraryTools(unittest.TestCase):
         self.assertIn("error", json.loads(tools.call("title_info", {"title": "Trailer Park Boys"}, "u1")))
 
     def test_titles_beyond_the_library_are_recommended_and_marked(self):
-        extra = pd.DataFrame([title("tt9", "Heist Three", 30, ["Crime"], HEIST, [person(1, "Star")],
+        extra = pd.DataFrame([title("tt9", "Heist Three", 30_000, ["Crime"], HEIST, [person(1, "Star")],
                                     "the crew plans a third bank job")])
         tools = make_tools(discovery=extra)
         out = json.loads(tools.call("search_library", {"query": "crew bank job"}, "u1"))

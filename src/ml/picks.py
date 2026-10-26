@@ -21,6 +21,10 @@ from .user_profiles import UserProfiles
 FRESH = "fresh"
 BACK_CATALOGUE = "back_catalogue"
 TO_REQUEST = "to_request"
+# titles to request must be well thought of: the titles beyond the server include TMDB's recommendations of library
+# titles, some of them obscure or poorly rated (live run, Oct 2026: a 3.4 from 330 votes made the list)
+REQUEST_MIN_RATING = 6.5
+REQUEST_MIN_VOTES = 5_000
 
 # users with fewer profile titles than this get no picks: a handful of titles is noise, not taste
 MIN_PROFILE_TITLES = 5
@@ -92,7 +96,8 @@ class Recommender:
     def to_request(self, user_id: str, n: int = 5) -> pd.DataFrame:
         """
         The titles NOT on the server closest to the user's taste, leaving out any already requested in Jellyseerr (by
-        anyone: they're on their way) and any the user watched. Empty without discovery titles (`load(discovery=True)`).
+        anyone: they're on their way), any the user watched, and any rated below REQUEST_MIN_RATING on IMDB or with
+        fewer than REQUEST_MIN_VOTES votes. Empty without discovery titles (`load(discovery=True)`).
 
         Returns:
             DataFrame: PICK_COLS, `list` TO_REQUEST, `score` the similarity
@@ -100,7 +105,9 @@ class Recommender:
         if self.discovery is None or not len(self.discovery):
             return pd.DataFrame(columns=PICK_COLS)
         _, profiles = self.wide
-        allowed = set(self.discovery["t_const"]) - self.library - self.requests.titles()
+        d = self.discovery
+        good = (d["avg_rating"].fillna(0) >= REQUEST_MIN_RATING) & (d["num_votes"].fillna(0) >= REQUEST_MIN_VOTES)
+        allowed = set(d.loc[good, "t_const"]) - self.library - self.requests.titles()
         out = profiles.recommend(user_id, n=n, allowed=allowed)
         out = out.assign(list=TO_REQUEST, rank=range(1, len(out) + 1), score=out["similarity"],
                          added_days_ago=float("nan"), you_requested=False)

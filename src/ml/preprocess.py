@@ -216,6 +216,12 @@ class PreProcess:
             raise ValueError("No TMDB title details yet - run the refresh (or SQLiteConnector.ingest_tmdb_title_details)")
         # Emby's IMDB ID is what watch history is linked through, so it wins over TMDB's
         d["t_const"] = d["emby_imdb_id"].fillna(d["imdb_id"])
+        if imdb_titles is not None:
+            # a title beyond the library whose TMDB kind contradicts IMDB's is a junk TMDB entry claiming the IMDB ID
+            # (e.g. a "movie" with the ID of a series): its details describe something else, so it's left out
+            imdb_kind = imdb_titles.set_index("t_const")["type"].map(lambda t: "tv" if t in ("tvSeries", "tvMiniSeries") else "movie")
+            kind = d["t_const"].map(imdb_kind)
+            d = d[d["in_library"] | kind.isna() | (kind == d["media_type"])]
         # a library title wins over a discovered one with the same IMDB ID
         d = (d[d["t_const"].notna()].sort_values(["t_const", "in_library", "media_type", "tmdb_id"], ascending=[True, False, True, True])
              .drop_duplicates("t_const"))

@@ -25,15 +25,16 @@ TMDB details for: everything TMDB recommends for a library title, and IMDB title
 [SQLite: titles beyond the library](../databases/sqlite.md#titles-beyond-the-library)). Search and similar titles
 cover both by default; every result says whether it's `on_server`, and the answer marks picks that aren't, so you can
 request them. Asking for "something on Emby" or "to watch tonight" limits it to the server (`availability`). The
-tools use their own `ContentKNN` and taste profiles over all of these titles; the daily picks and playlists keep the
-library-only model, since they can only hold what the server has.
+tools use a `ContentKNN` and taste profiles over all of these titles (`Recommender.wide`). The daily picks' two
+playlists keep the library-only model, since playlists can only hold what the server has; their titles to request
+use the wide one.
 
 | Tool | What it does |
 | --- | --- |
 | `search_library` | Text search (TF-IDF, words and two-word phrases) over each title's name, genres, TMDB keywords, cast/crew and plot, for moods and descriptions. Words that ask for a genre ("funny", "comedy", "scary", "thriller", "sci-fi"...: `GENRE_WORDS`) also count: the share of those genres a title has is averaged with the text match, so "funny small town show" gives comedies, not every show that mentions a small town. With `like` (a title the user liked), that's averaged with the similarity to the `like` title, each scaled to its best match: one call does "like X, but ...", which a small model handles much better than combining two tool results itself. Last, the IMDb rating nudges the order (`QUALITY_WEIGHT`, 20%; the rating weighted by its vote count), so that of thousands of equally good matches the well-rated go first, not obscure ones. Words like "movie" or "show" are left out of the text match: `kind` says that. |
 | `similar_titles` | `ContentKNN` neighbours of a title (keywords, people, plot, genre, MovieLens), with what they have in common. |
 | `title_info` | One title's plot, genres, keywords, crew and cast, whether it's on the server, and whether you've watched it. |
-| `my_recommendations` | Your daily picks (`Recommender.picks()`): `fresh` or `back_catalogue`. These are on the server. |
+| `my_recommendations` | Your daily picks (`Recommender.picks()`): `fresh` or `back_catalogue`, on the server; or `to_request`, titles not on the server worth requesting (`Recommender.to_request()`). |
 | `my_watch_history` | What you watched most, or most recently. |
 
 Results include each title's length from Emby (`PreProcess.get_title_runtimes()`: a movie's runtime, or a show's

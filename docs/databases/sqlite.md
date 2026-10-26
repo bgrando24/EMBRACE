@@ -63,12 +63,14 @@ Which titles get fetched:
 
 ### Titles beyond the library
 
-So the chat-bot can recommend what the server doesn't have, `SQLiteConnector.ingest_tmdb_discovery_details(...)` stores details of titles beyond the library in the same `tmdb_title_details` table:
+So the chat-bot and the daily picks' "to request" list can recommend what the server doesn't have, `SQLiteConnector.ingest_tmdb_discovery_details(...)` stores details of titles beyond the library in the same `tmdb_title_details` table:
 - Every title TMDB recommends for a library title ("people who liked this also liked"). Only the library's recommendations count, not these titles' own, so the set doesn't keep growing.
 - Popular IMDB titles: `DISCOVERY_MIN_VOTES` (25,000) votes or more, from `PreProcess.get_popular_imdb_ids()`. Each is looked up once, in `tmdb_discovery_lookups` (same columns as `tmdb_imdb_lookups`).
 - About 12,000 titles in Oct 2026. Details older than 180 days are refetched.
 
 `get_tmdb_title_details()` returns an `in_library` column to tell them apart, and `PreProcess.get_title_content()` only returns the library's unless asked (`discovery=True`), so the daily picks' model and the evaluation are unaffected.
+
+TMDB has a few junk entries that claim a real title's IMDB ID, such as a "movie" with a series' ID. `TMDBConnector.find_by_imdb_id()` takes the entry with the most votes. `get_title_content()` also leaves out any title beyond the library whose TMDB kind (movie or tv) contradicts IMDB's. In Oct 2026 that was 10 of about 8,600 lookups.
 
 The daily refresh fetches at most 3,000 lookups and 3,000 titles per run (`DISCOVERY_PER_RUN`, about 25 minutes at TMDB's ~0.25 s per request). To fill everything at once (about 1.5 hours the first time), run `PYTHONPATH=src python scripts/sqlite/tmdb_discovery_fill.py` outside the refresh: it writes the live database, and it refuses to start while the refresh's working copy exists.
 - The first run is ~600 requests (~3 min); after that, only new titles.

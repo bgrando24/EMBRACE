@@ -290,11 +290,14 @@ Evaluated on 195 requests (Dec 2025 - Oct 2026, 5 requesters):
 
 ## Daily picks: `Recommender` (`ml.picks`)
 
-`Recommender.load(pp)` builds the default model once: ContentKNN with MovieLens when it's downloaded, falling back to GenreKNN without TMDB details. It also builds the user profiles (including Emby played flags), the library, `Freshness` and `Requests`. `src/ml/main.py` and the nightly picks job both use it.
+`Recommender.load(pp)` builds the default model once: ContentKNN with MovieLens when it's downloaded, falling back to GenreKNN without TMDB details. It also builds the user profiles (including Emby played flags), the library, `Freshness` and `Requests`. `src/ml/main.py` and the nightly picks job both use it. With `discovery=True`, it also loads the titles beyond the library ([SQLite](../databases/sqlite.md#titles-beyond-the-library)). `Recommender.wide` is then a second model and set of profiles over the library and those titles together, built on first use. The chat-bot searches it, and `to_request()` ranks with it. The library-only model is what `fresh` and `back_catalogue` use.
 
 `picks(user_id, n=10, when=None)` returns two lists, and a title is never in both:
 - **`fresh`:** taste + the freshness boost + the user's own requests. What people watch next is mostly what just arrived (see [time-aware evaluation](#time-aware-next_watch)).
 - **`back_catalogue`:** taste alone, leaving out the fresh list. This surfaces older titles that Emby's own "Latest" row won't.
+- **`to_request`** (only with `n_request`, and discovery titles loaded): taste alone over the titles NOT on the server, from `to_request()`. It leaves out:
+    - titles anyone has already requested in Jellyseerr (they're on their way);
+    - titles rated below `REQUEST_MIN_RATING` (6.5) on IMDb, or with fewer than `REQUEST_MIN_VOTES` (5,000) votes. TMDB's recommendations include obscure and poorly rated titles; the first live run listed a 3.4 from 330 votes.
 
 Columns: `list`, `rank`, `t_const`, `primary_name`, `start_year`, `type`, `similarity`, `score`, `because_you_watched`, `shared`, `added_days_ago`, `you_requested`.
 
@@ -307,11 +310,12 @@ Runs after the refresh (see [Scheduled Jobs](../workflows/cron_jobs.md)):
 - **Shows:** adding a series to an Emby playlist adds every episode, so a show is represented by its S1E1 (`PreProcess.get_playlist_items()`).
   - **Missing S1E1:** a show whose S1E1 isn't on the server is left out, and the next pick takes its place.
   - **Anthologies:** shows TMDB tags `anthology`, where each season stands alone, may start at episode 1 of their earliest season.
-- **Discord preview:** a summary of everyone's top 3 per list goes to `DISCORD_WEBHOOK_URL`.
+- **Discord preview:** a summary of everyone's top 3 per list goes to `DISCORD_WEBHOOK_URL`. It also shows each user's 5 titles to request (`-r`, 0 for none), each linked to its page on `JELLYSEERR_URL` (TMDB's without it). These have no playlist, as Emby playlists only hold titles on the server.
 - **Log:** every pick is appended to [`recommendation_log`](../databases/sqlite.md#recommendation-log), so later watch history can show which picks were actually watched.
 - **Opt-out:** users named in `EMBRACE_PICKS_EXCLUDE_USERS` get no playlists, and their picks are left out of the preview.
 
 ```sh
 PYTHONPATH=src python scripts/picks/daily_picks.py --dry-run     # print everyone's picks, change nothing
 PYTHONPATH=src python scripts/picks/daily_picks.py --users NAME  # one user only
+PYTHONPATH=src python scripts/picks/daily_picks.py -r 0          # no titles to request
 ```

@@ -123,7 +123,7 @@ Discord ID and asked to get linked, and nothing about the library or anyone's hi
     journalctl --user -u embrace-chat -f     # tool calls are logged here
     ```
 
-    The bot itself is light (the recommender data, about 1 GB of memory); the LLM runs elsewhere.
+    The bot itself needs no GPU: about 1.2 GB of memory with ~12k titles (Oct 2026), loading in ~15 s; the LLM runs elsewhere.
 
 ## In the terminal: `scripts/chat/chat_cli.py`
 

@@ -1,10 +1,11 @@
 """
 Daily picks: each user's recommendations as two private Emby playlists ("Fresh for you", "From the back catalogue"),
-plus a preview of everyone's picks to the Discord webhook. Each run is appended to the `recommendation_log` table.
+plus a preview of everyone's picks to the Discord webhook, with titles NOT on the server worth requesting (no playlist:
+Emby's only hold what the server has; linked to their Jellyseerr page). Each run is appended to `recommendation_log`.
 Runs after the nightly refresh (scripts/systemd/embrace-picks.service); see docs/workflows/cron_jobs.md.
 
 usage (from project root): PYTHONPATH=src python scripts/picks/daily_picks.py [--dry-run] [--no-emby] [--no-discord]
-                                                                             [--users NAME,...] [-n 10]
+                                                                             [--users NAME,...] [-n 10] [-r 5]
 """
 import argparse
 import os
@@ -18,7 +19,7 @@ from dotenv import load_dotenv
 
 from connectors import EmbyConnector
 from ml import PreProcess, Recommender
-from ml.picks import BACK_CATALOGUE, FRESH
+from ml.picks import BACK_CATALOGUE, FRESH, TO_REQUEST
 from utils import Notifications
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -26,8 +27,9 @@ os.chdir(ROOT_DIR)  # SQLiteConnector resolves "sqlite_db/" relative to the work
 load_dotenv(ROOT_DIR / ".env")
 
 PLAYLIST_NAMES = {FRESH: "Fresh for you", BACK_CATALOGUE: "From the back catalogue"}
-LIST_LABELS = {FRESH: "new", BACK_CATALOGUE: "back catalogue"}
-# picks per list shown in the Discord preview (the playlists get all of them)
+LIST_LABELS = {FRESH: "new", BACK_CATALOGUE: "back catalogue", TO_REQUEST: "to request"}
+# picks per list shown in the Discord preview (the playlists get all of them); every title to request is shown, as no
+# playlist holds them
 PREVIEW_PER_LIST = 3
 tz = ZoneInfo("Australia/Melbourne")
 
@@ -39,6 +41,7 @@ def parse_args():
     p.add_argument("--no-discord", action="store_true", help="print the preview instead of sending it")
     p.add_argument("--users", help="comma-separated Emby user names (default: everyone eligible)")
     p.add_argument("-n", type=int, default=10, help="titles per list (default 10)")
+    p.add_argument("-r", type=int, default=5, help="titles not on the server to request, per user (default 5; 0: none)")
     return p.parse_args()
 
 
@@ -56,14 +59,32 @@ def label(row) -> str:
     return f"{row.primary_name}{year}{requested}"
 
 
-def preview(picks: pd.DataFrame, statuses: dict[str, str], when: datetime) -> list[str]:
+def request_link(row, pages: pd.DataFrame) -> str:
+    """The title linked to its Jellyseerr page (TMDB's without Jellyseerr); <> so Discord doesn't preview each link"""
+    if row.t_const not in pages.index or pd.isna(pages.at[row.t_const, "tmdb_id"]):
+        return label(row)
+    media, tmdb_id = pages.at[row.t_const, "media_type"], int(pages.at[row.t_const, "tmdb_id"])
+    base = (os.getenv("JELLYSEERR_URL") or "").rstrip("/") or "https://www.themoviedb.org"
+    return f"[{label(row)}](<{base}/{media}/{tmdb_id}>)"
+
+
+def preview(picks: pd.DataFrame, statuses: dict[str, str], when: datetime, pages: pd.DataFrame) -> list[str]:
+    """
+    Args:
+        pages (DataFrame): t_const -> media_type, tmdb_id of the titles beyond the server, for their request links
+    """
     lines = [f"**Daily picks** - {when.strftime('%a %d %b')}"]
     for user_name, mine in picks.groupby("user_name", sort=True):
-        lines.append(f"**{user_name}**" + (f" - playlists {statuses[user_name]}" if user_name in statuses else ""))
+        user = [f"**{user_name}**" + (f" - playlists {statuses[user_name]}" if user_name in statuses else "")]
         for lst in (FRESH, BACK_CATALOGUE):
             top = mine[mine["list"] == lst].nsmallest(PREVIEW_PER_LIST, "rank")
             if len(top):
-                lines.append(f"  {LIST_LABELS[lst]}: " + ", ".join(label(r) for r in top.itertuples()))
+                user.append(f"  {LIST_LABELS[lst]}: " + ", ".join(label(r) for r in top.itertuples()))
+        top = mine[mine["list"] == TO_REQUEST].sort_values("rank")
+        if len(top):
+            user.append(f"  {LIST_LABELS[TO_REQUEST]}: " + ", ".join(request_link(r, pages) for r in top.itertuples()))
+        # one "line" per user, so a message too long for Discord is split between users, never within one
+        lines.append("\n".join(user))
     return lines
 
 
@@ -83,11 +104,13 @@ def main():
 
     try:
         pp = PreProcess()
-        rec = Recommender.load(pp)
+        rec = Recommender.load(pp, discovery=args.r > 0)
         playlist_items = pp.get_playlist_items()
         # only titles that can go in a playlist, so each list still fills up (e.g. shows missing their S1E1 are out)
         rec.library &= set(playlist_items.index)
-        picks = rec.all_picks(n=args.n, users=set(names))
+        picks = rec.all_picks(n=args.n, users=set(names), n_request=args.r)
+        pages = (rec.discovery if rec.discovery is not None else pd.DataFrame(columns=["t_const", "media_type", "tmdb_id"])
+                 ).drop_duplicates("t_const").set_index("t_const")[["media_type", "tmdb_id"]]
         picks["user_name"] = picks["user_id"].map(names)
         picks["item_id"] = picks["t_const"].map(playlist_items)
     except Exception as e:
@@ -100,7 +123,7 @@ def main():
                 "added_days_ago", "you_requested", "item_id"]
         with pd.option_context("display.width", 200, "display.max_rows", None, "display.max_colwidth", 40):
             print(picks[cols].to_string(index=False))
-        print("\n".join(preview(picks, {}, started)))
+        print("\n".join(preview(picks, {}, started, pages)))
         return
 
     # ---- playlists: one user failing doesn't stop the others ----
@@ -123,7 +146,7 @@ def main():
     if logged < 0:
         print("[WARN] recommendations were not logged", file=sys.stderr)
 
-    lines = preview(picks, statuses, started)
+    lines = preview(picks, statuses, started, pages)
     if failures:
         lines.append(f"Playlist updates FAILED for {failures} user(s), see the journal")
     if notify:

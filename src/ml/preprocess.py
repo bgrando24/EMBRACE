@@ -88,6 +88,12 @@ class PreProcess:
         return encoded
 
 
+    def get_popular_imdb_ids(self, min_votes: int) -> list[str]:
+        """IMDB IDs of movies and shows with at least `min_votes` votes, most voted first (from `imdb_get_encoded_genres`)"""
+        t = self.imdb_get_encoded_genres()
+        return t[t["num_votes"].fillna(0) >= min_votes].sort_values("num_votes", ascending=False)["t_const"].tolist()
+
+
     @staticmethod
     def encode_title_genres(data: pd.DataFrame) -> pd.DataFrame:
         """
@@ -119,6 +125,25 @@ class PreProcess:
         current = lib.loc[lib["removed_at"].isna() & lib["item_type"].isin(["Movie", "Series"]), "item_id"]
         prov = self.sqlite.get_item_provider_ids()
         return set(prov.loc[(prov["provider"] == "imdb") & prov["item_id"].isin(current), "provider_item_id"])
+
+
+    def get_title_runtimes(self) -> pd.Series:
+        """
+        Minutes per IMDB title on the Emby server: a movie's runtime, or a series' median episode runtime (from Emby;
+        items without a runtime are skipped). An ID that is both a movie and a series keeps the movie's.
+        """
+        lib = self.sqlite.get_library_items()
+        lib = lib[lib["removed_at"].isna() & (lib["runtime_seconds"].fillna(0) > 0)]
+        prov = self.sqlite.get_item_provider_ids()
+        imdb = prov[prov["provider"] == "imdb"].drop_duplicates("item_id").set_index("item_id")["provider_item_id"]
+        movies = lib[lib["item_type"] == "Movie"]
+        episodes = lib[lib["item_type"] == "Episode"]
+        movies = movies.assign(t_const=movies["item_id"].map(imdb)).dropna(subset=["t_const"])
+        episodes = episodes.assign(t_const=episodes["series_id"].map(imdb)).dropna(subset=["t_const"])
+        movies = movies.groupby("t_const")["runtime_seconds"].median()
+        series = episodes.groupby("t_const")["runtime_seconds"].median()
+        out = pd.concat([movies, series[~series.index.isin(movies.index)]])
+        return (out / 60).round().astype(int).rename("minutes")
 
 
     # TMDB keyword for shows whose seasons stand alone (e.g. American Horror Story), see `get_playlist_items()`
@@ -166,7 +191,8 @@ class PreProcess:
         return set(d["emby_imdb_id"].fillna(d["imdb_id"]).dropna())
 
 
-    def get_title_content(self, imdb_titles: pd.DataFrame | None = None, movielens: pd.Series | None = None) -> pd.DataFrame:
+    def get_title_content(self, imdb_titles: pd.DataFrame | None = None, movielens: pd.Series | None = None,
+                          discovery: bool = False) -> pd.DataFrame:
         """
         One row per IMDB title with fetched TMDB details (see `SQLiteConnector.ingest_tmdb_title_details`), for
         `ContentKNN`.
@@ -176,17 +202,29 @@ class PreProcess:
                 ratings, vote counts (the tie-break) and genres; without it, or for titles it doesn't have, TMDB's are
                 used and num_votes is missing.
             movielens (Series, optional): output of `get_movielens_likers()`, added as `movielens_likers`
+            discovery (bool, optional): also the titles beyond the library (`SQLiteConnector.ingest_tmdb_discovery_details`,
+                for the chat-bot), told apart by `in_library` - DEFAULT: the library's titles only
 
         Returns:
             DataFrame: t_const, primary_name, type, start_year, avg_rating, num_votes, genres, keywords, collection,
-                       original_language, people, overview, media_type, tmdb_id, recommendations
+                       original_language, people, overview, media_type, tmdb_id, recommendations, in_library
         """
         d = self.sqlite.get_tmdb_title_details()
+        if not d.empty and not discovery:
+            d = d[d["in_library"]]
         if d.empty:
             raise ValueError("No TMDB title details yet - run the refresh (or SQLiteConnector.ingest_tmdb_title_details)")
         # Emby's IMDB ID is what watch history is linked through, so it wins over TMDB's
         d["t_const"] = d["emby_imdb_id"].fillna(d["imdb_id"])
-        d = d[d["t_const"].notna()].sort_values(["t_const", "media_type", "tmdb_id"]).drop_duplicates("t_const")
+        if imdb_titles is not None:
+            # a title beyond the library whose TMDB kind contradicts IMDB's is a junk TMDB entry claiming the IMDB ID
+            # (e.g. a "movie" with the ID of a series): its details describe something else, so it's left out
+            imdb_kind = imdb_titles.set_index("t_const")["type"].map(lambda t: "tv" if t in ("tvSeries", "tvMiniSeries") else "movie")
+            kind = d["t_const"].map(imdb_kind)
+            d = d[d["in_library"] | kind.isna() | (kind == d["media_type"])]
+        # a library title wins over a discovered one with the same IMDB ID
+        d = (d[d["t_const"].notna()].sort_values(["t_const", "in_library", "media_type", "tmdb_id"], ascending=[True, False, True, True])
+             .drop_duplicates("t_const"))
 
         out = pd.DataFrame({
             "t_const": d["t_const"],
@@ -210,7 +248,7 @@ class PreProcess:
 
         out = out.reset_index()
         d = d.set_index("t_const").loc[out["t_const"]].reset_index()
-        for col in ["keywords", "collection", "original_language", "people", "overview", "media_type", "tmdb_id", "recommendations"]:
+        for col in ["keywords", "collection", "original_language", "people", "overview", "media_type", "tmdb_id", "recommendations", "in_library"]:
             out[col] = d[col].to_numpy()
         if movielens is not None:
             out["movielens_likers"] = out["t_const"].map(movielens)

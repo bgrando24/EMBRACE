@@ -12,6 +12,7 @@ cramjam==2.11.0
 cycler==0.12.1
 debugpy==1.8.16
 decorator==5.2.1
+discord.py==2.6.4
 dotenv==0.9.9
 executing==2.2.1
 fastparquet==2024.11.0

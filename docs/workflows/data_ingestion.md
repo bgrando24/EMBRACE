@@ -65,7 +65,7 @@ Needs step 2 first, because it uses the TMDB provider IDs ingested there:
 - Shows only known through their episodes are found with TMDB's `/find`.
 - Returns the number fetched, or -1 if every fetch failed.
 
-See [SQLite: TMDB title details](../databases/sqlite.md#tmdb-title-details).
+The refresh then fetches details of titles beyond the library, for the chat-bot (`sqlite.ingest_tmdb_discovery_details(...)`, at most 3,000 per run). See [SQLite: TMDB title details](../databases/sqlite.md#tmdb-title-details).
 
 ## 3. Import raw watch history
 

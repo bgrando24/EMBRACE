@@ -131,7 +131,8 @@ class TMDBConnector:
     def find_by_imdb_id(self, imdb_id: str, retries: int = 3) -> Optional[tuple[str, int]]:
         """
         Finds the TMDB movie or show for an IMDB ID. An episode's IMDB ID resolves to its show, which is how shows that
-        were removed from the library (so have no TMDB link of their own) are found from their episodes.
+        were removed from the library (so have no TMDB link of their own) are found from their episodes. When TMDB has
+        several entries for the ID (e.g. a junk "movie" claiming a series' ID), the one with the most votes wins.
 
         Returns:
             ("movie" | "tv", tmdb_id), or None if TMDB doesn't know the ID
@@ -139,12 +140,27 @@ class TMDBConnector:
         d = self._get(f"/find/{imdb_id}", {"external_source": "imdb_id"}, retries)
         if d is None:
             return None
-        if d.get("movie_results"):
-            return "movie", int(d["movie_results"][0]["id"])
-        if d.get("tv_results"):
-            return "tv", int(d["tv_results"][0]["id"])
+        found = [(r.get("vote_count") or 0, r.get("popularity") or 0, media, int(r["id"]))
+                 for media in ("movie", "tv") for r in d.get(f"{media}_results") or []]
+        if found:
+            _, _, media, tmdb_id = max(found, key=lambda f: f[:2])
+            return media, tmdb_id
         if d.get("tv_episode_results"):
             return "tv", int(d["tv_episode_results"][0]["show_id"])
+        return None
+
+    def search_title(self, query: str, retries: int = 3) -> Optional[dict]:
+        """
+        TMDB's best match for a movie or show name (its multi search, ranked by relevance and popularity).
+
+        Returns:
+            {"media_type": "movie" | "tv", "tmdb_id": int, "year": int | None}, or None if nothing matches
+        """
+        d = self._get("/search/multi", {"query": query, "include_adult": "false", "language": "en-US"}, retries)
+        for r in (d or {}).get("results", []):
+            if r.get("media_type") in ("movie", "tv"):
+                year = (r.get("release_date") or r.get("first_air_date") or "")[:4]
+                return {"media_type": r["media_type"], "tmdb_id": int(r["id"]), "year": int(year) if year.isdigit() else None}
         return None
 
     def _get(self, path: str, params: dict, retries: int) -> Optional[dict]:

@@ -7,7 +7,7 @@ import pandas as pd
 
 from connectors import EmbyConnector, SQLiteConnector
 from ml import ContentKNN, Freshness, PreProcess, Recommender, Requests, UserProfiles
-from ml.picks import BACK_CATALOGUE, FRESH
+from ml.picks import BACK_CATALOGUE, FRESH, TO_REQUEST
 from test_content_knn import CONTENT
 from test_freshness import ADDITIONS
 from test_tmdb_content import details, response
@@ -65,6 +65,53 @@ def item(item_id, item_type, imdb=None, series_id=None, season=None, episode=Non
     return {"Id": item_id, "Name": item_id, "Type": item_type, "RunTimeTicks": 1500 * 10_000_000, "SeriesId": series_id,
             "SeriesName": "Show" if series_id else None, "ParentIndexNumber": season, "IndexNumber": episode,
             "DateCreated": created, "Genres": [], "ProviderIds": {"Imdb": imdb} if imdb else {}}
+
+
+class TestToRequest(unittest.TestCase):
+    """Titles beyond the server worth requesting: CONTENT split into the library and titles the server doesn't have"""
+
+    BEYOND = {"tt2", "tt4", "tt7"}
+
+    def setUp(self):
+        library = CONTENT[~CONTENT["t_const"].isin(self.BEYOND)].reset_index(drop=True)
+        knn = ContentKNN(library)
+        history = pd.DataFrame([watched("tt3"), watched("tt1"), watched("tt5", user="u2")])
+        requests = pd.DataFrame([{"user_id": "u2", "t_const": "tt7", "requested_at": "2026-01-01"}])
+        self.rec = Recommender(
+            knn=knn, profiles=UserProfiles(knn, history), library=set(library["t_const"]),
+            freshness=Freshness(ADDITIONS), requests=Requests(requests), content=library,
+            discovery=CONTENT[CONTENT["t_const"].isin(self.BEYOND)].assign(num_votes=50_000).reset_index(drop=True),
+        )
+
+    def test_only_titles_beyond_the_server_not_yet_requested(self):
+        out = self.rec.to_request("u1", n=5)
+        self.assertEqual(out["t_const"].iloc[0], "tt2")         # Heist Two: like the heist and detective titles watched
+        self.assertTrue(set(out["t_const"]) <= self.BEYOND - {"tt7"})   # tt7: someone requested it already
+        self.assertEqual(out["rank"].tolist(), list(range(1, len(out) + 1)))
+        self.assertEqual(set(out["list"]), {TO_REQUEST})
+
+    def test_poorly_rated_or_little_known_titles_are_left_out(self):
+        d = self.rec.discovery
+        self.rec.discovery = d.assign(avg_rating=d["avg_rating"].where(d["t_const"] != "tt2", 5.0))
+        self.assertNotIn("tt2", set(self.rec.to_request("u1")["t_const"]))
+        self.rec.discovery = d.assign(num_votes=d["num_votes"].where(d["t_const"] != "tt2", 800))
+        self.assertNotIn("tt2", set(self.rec.to_request("u1")["t_const"]))
+
+    def test_picks_add_them_as_a_third_list_and_keep_the_others_on_the_server(self):
+        picks = self.rec.picks("u1", n=3, when="2026-03-01", n_request=2)
+        self.assertEqual(len(picks[picks["list"] == TO_REQUEST]), min(2, len(self.rec.to_request("u1"))))
+        on_server = picks[picks["list"] != TO_REQUEST]
+        self.assertTrue(set(on_server["t_const"]) <= self.rec.library)
+        self.assertNotIn(TO_REQUEST, set(self.rec.picks("u1", n=3, when="2026-03-01")["list"]))   # only when asked
+
+    def test_the_library_model_stays_library_only(self):
+        self.assertNotIn("tt2", self.rec.knn)
+        self.assertIn("tt2", self.rec.wide[0])
+
+    def test_nothing_without_discovery_titles(self):
+        self.rec.discovery = None
+        self.assertTrue(self.rec.to_request("u1").empty)
+        self.assertNotIn(TO_REQUEST, set(self.rec.picks("u1", n=2, n_request=3)["list"]))
 
 
 class TempDBTestCase(unittest.TestCase):

@@ -19,6 +19,10 @@ class Requests:
         r = requests.dropna(subset=["t_const", "requested_at"])
         self._requests = r.assign(requested_at=pd.to_datetime(r["requested_at"]))
 
+    def titles(self) -> set[str]:
+        """IMDB IDs of every title anyone has requested"""
+        return set(self._requests["t_const"])
+
     def boost(self, when=None, user_id=None, own: float = DEFAULT_OWN, others: float = 0.0) -> pd.Series:
         """
         t_const -> `own` for titles `user_id` requested before `when` (DEFAULT: now), else `others` for titles

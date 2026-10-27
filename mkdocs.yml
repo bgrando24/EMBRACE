@@ -9,6 +9,7 @@ nav:
                 - Overview: modules/index.md
                 - Connectors: modules/connectors.md
                 - Machine Learning (ML): modules/ml.md
+                - Chat-bot: modules/chat.md
           - Databases:
                 - SQLite: databases/sqlite.md
                 - MySQL: databases/mysql.md

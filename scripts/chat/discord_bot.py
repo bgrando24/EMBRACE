@@ -10,6 +10,7 @@ import asyncio
 import os
 import re
 import sys
+import threading
 import time
 import traceback
 from pathlib import Path
@@ -18,7 +19,7 @@ from typing import Optional
 import discord
 from dotenv import load_dotenv
 
-from chat import ChatSession, LibraryTools, LLMUnavailable, OllamaClient, tmdb_lookup
+from chat import ChatSession, LibraryTools, LLMUnavailable, OllamaClient, TitleEmbeddings, tmdb_lookup
 from connectors import EmbyConnector, TMDBConnector
 from ml import PreProcess, Recommender
 from utils import Notifications
@@ -31,7 +32,8 @@ load_dotenv(ROOT_DIR / ".env")
 IDLE_RESET_SECONDS = 2 * 3600
 HELP = (
     "Ask me for something to watch, e.g. *\"a funny show like Letterkenny\"*, *\"a tense thriller under 2 hours\"* "
-    "or just *\"what should I watch tonight?\"*. I know what's on the server and what you've watched.\n"
+    "or just *\"what should I watch tonight?\"*. I know what's on the server, a lot that isn't (you can request "
+    "it), and what you've watched.\n"
     "`reset` starts a new conversation, `status` shows whether my LLM is running."
 )
 OFFLINE = (
@@ -56,9 +58,13 @@ def parse_user_links(raw: Optional[str]) -> dict[int, str]:
 
 
 class Brain:
-    """The recommender data and the chat tools, reloaded when the nightly refresh has updated the database"""
+    """
+    The recommender data and the chat tools, reloaded when the nightly refresh has updated the database, and the
+    title embeddings for search by meaning. Those are made by the LLM host, so `embed_missing()` runs in the
+    background whenever the host is up and something isn't embedded yet; until then search matches words only.
+    """
 
-    def __init__(self):
+    def __init__(self, llm: OllamaClient):
         self.db_path = ROOT_DIR / "sqlite_db" / (os.getenv("SQLITE_DB_NAME") or "EMBRACE_SQLITE_DB.db")
         self.tools: Optional[LibraryTools] = None
         self.loaded_mtime = 0.0
@@ -67,6 +73,10 @@ class Brain:
         # titles the server never had ("something like X") are looked up on TMDB; without a token, they're unknown
         token = os.getenv("TMDB_READ_ACCESS_TOKEN")
         self.lookup = tmdb_lookup(TMDBConnector(token)) if token else None
+        self.llm = llm
+        self.embeddings = TitleEmbeddings(llm.embed_model)
+        self.embeddings_done = False        # every title of the loaded tools is embedded and in use
+        self._embedding = threading.Lock()
 
     def stale(self) -> bool:
         try:
@@ -79,12 +89,41 @@ class Brain:
         pp = PreProcess()
         rec = Recommender.load(pp, log=log, discovery=True)
         self.tools = LibraryTools(rec, runtimes=pp.get_title_runtimes(), lookup=self.lookup)
+        self.embeddings_done = False
+        # what's cached already works now, before anything new is embedded; if an embedding run is busy, it's left to
+        # the next one (never make a message wait minutes for it)
+        if self._embedding.acquire(blocking=False):
+            try:
+                if len(self.embeddings):
+                    self.tools.use_embeddings(self.embeddings, self.llm.embed)
+            finally:
+                self._embedding.release()
         try:
             self.emby_ids = {name.casefold(): uid for name, uid in EmbyConnector().get_all_emby_users().items()}
         except Exception as e:     # Emby down: fall back to the names in watch history
             log(f"[WARN] Emby users unavailable ({type(e).__name__}: {e})")
         self.loaded_mtime, self.loaded_at = mtime, time.time()
         log(f"[INFO] loaded {len(self.tools.titles)} titles ({len(self.tools.library)} on the server)")
+
+    def embed_missing(self) -> None:
+        """Embeds the titles that aren't yet (all ~12k the first time: ~4 min), then searches with them. Needs the host."""
+        if not self._embedding.acquire(blocking=False):
+            return      # already running
+        try:
+            tools = self.tools
+            texts = TitleEmbeddings.texts(tools.titles)
+            todo = len(self.embeddings.missing(texts))
+            if todo:
+                log(f"[INFO] embedding {todo} titles for search by meaning ({self.embeddings.model})")
+                self.embeddings.update(texts, self.llm.embed, log=log)
+            tools.use_embeddings(self.embeddings, self.llm.embed)
+            self.embeddings_done = tools is self.tools
+        except LLMUnavailable as e:
+            log(f"[INFO] title embeddings wait for the LLM host ({e})")
+        except Exception as e:
+            log(f"[WARN] embedding titles failed ({type(e).__name__}: {e}); search matches words until it works")
+        finally:
+            self._embedding.release()
 
     def user_id(self, emby_name: str) -> Optional[str]:
         """Canonical Emby user ID for a name: watch history's (aliases resolved) first, then Emby's current users"""
@@ -100,13 +139,22 @@ class EmbraceBot(discord.Client):
         # privileged message-content intent
         super().__init__(intents=discord.Intents.default())
         self.links = links
-        self.brain = Brain()
         self.llm = OllamaClient()
+        self.brain = Brain(self.llm)
+        self.background: set[asyncio.Task] = set()
         self.sessions: dict[tuple[int, int], tuple[ChatSession, float]] = {}
         self.llm_lock = asyncio.Lock()      # one GPU: questions are answered one at a time
 
     async def setup_hook(self) -> None:
         await asyncio.to_thread(self.brain.load)
+        self.embed_in_background()
+
+    def embed_in_background(self) -> None:
+        """Start `Brain.embed_missing()` unless everything's embedded; it returns at once if the host is off"""
+        if not self.brain.embeddings_done:
+            task = asyncio.create_task(asyncio.to_thread(self.brain.embed_missing))
+            self.background.add(task)       # keep a reference until it's done
+            task.add_done_callback(self.background.discard)
 
     async def on_ready(self) -> None:
         log(f"[INFO] logged in as {self.user} - {len(self.links)} linked users, LLM hosts {self.llm.hosts}")
@@ -154,6 +202,7 @@ class EmbraceBot(discord.Client):
                 answer = f"Something went wrong on my end ({type(e).__name__}) - the details are in my log."
         for part in Notifications.split_message(answer.split("\n")):    # Discord's 2000-character limit
             await message.reply(part, mention_author=False)
+        self.embed_in_background()      # the host just answered (or the data was reloaded): embed what's new
 
     def session(self, key: tuple[int, int], emby_name: str) -> ChatSession:
         """The conversation in this channel with this person: continued unless idle, always on the latest tools"""
@@ -170,7 +219,9 @@ class EmbraceBot(discord.Client):
         host = self.llm.find_host()
         llm = f"LLM: **running** ({self.llm.model} at {host})" if host else "LLM: **off** - " + OFFLINE
         age = (time.time() - self.brain.loaded_at) / 3600
-        return f"{llm}\nLibrary data loaded {age:.1f} h ago."
+        search = ("by meaning and words" if self.brain.embeddings_done else
+                  f"by words only for now ({len(self.brain.embeddings)} titles embedded)")
+        return f"{llm}\nLibrary data loaded {age:.1f} h ago. Search: {search}."
 
 
 def main():

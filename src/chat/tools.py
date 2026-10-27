@@ -10,6 +10,8 @@ import scipy.sparse as sp
 from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS, TfidfVectorizer
 
 from ml import Recommender
+
+from .embeddings import QUERY_INSTRUCTION, TitleEmbeddings
 from ml.picks import BACK_CATALOGUE, FRESH, TO_REQUEST
 
 # IMDB title types shown to the LLM as "show"; everything else (movie, tvMovie, ...) is a "movie"
@@ -23,6 +25,11 @@ INFO_CAST = 6
 # plot it says nothing ("a movie star")
 SEARCH_STOP_WORDS = list(ENGLISH_STOP_WORDS | {"movie", "movies", "film", "films", "show", "shows", "series", "tv",
                                                "watch", "something", "good", "great", "best"})
+# with title embeddings (`use_embeddings()`), how much of a query's match is by meaning; the rest is the word match,
+# which still catches names and exact phrases. Chosen by comparing results on typical queries (Oct 2026), since the
+# offline evaluation can't score search: "mind-bending sci-fi" went from Repo Man / Scanners to Interstellar /
+# Edge of Tomorrow, "cozy feel-good show" from horror films to Schitt's Creek
+SEMANTIC_WEIGHT = 0.75
 # how much search ranking leans on a title's IMDB rating: relevance x (1 - QUALITY_WEIGHT + QUALITY_WEIGHT x quality),
 # so of equally good matches the better-rated go first, while a clearly better match still wins. Matters once search
 # covers thousands of titles beyond the server, many of them obscure
@@ -141,6 +148,9 @@ class LibraryTools:
 
         # text search over everything said about a title; bigrams so "small town" or "serial killer" match as phrases
         docs = [self._doc(r.primary_name, r.genres, r.keywords, r.people, r.overview) for r in self.titles.itertuples()]
+        # search by meaning, once embeddings are attached (`use_embeddings()`): one row per title, zeros if not embedded
+        self._E: Optional[np.ndarray] = None
+        self._embed: Optional[Callable[[list[str]], np.ndarray]] = None
         self._vectorizer = TfidfVectorizer(stop_words=SEARCH_STOP_WORDS, ngram_range=(1, 2), sublinear_tf=True)
         self._X = sp.csr_matrix(self._vectorizer.fit_transform(docs))
         # 0-1 from the vote-weighted IMDB rating (5 or less -> 0, 9 or more -> 1); no rating -> in between
@@ -256,6 +266,9 @@ class LibraryTools:
         ids, out = self._ids[mask], {}
         q = self._vectorizer.transform([query or ""])
         text = self._scaled(pd.Series(np.asarray((self._X[np.flatnonzero(mask)] @ q.T).todense()).ravel(), index=ids))
+        meaning = self._meaning(query, mask, ids)
+        if meaning is not None:
+            text = SEMANTIC_WEIGHT * meaning + (1 - SEMANTIC_WEIGHT) * text
         matches = [text] if text.max() > 0 else []
         wanted = {g for g, words in self._genre_words.items() if words.search(_norm(query or ""))}
         if wanted:
@@ -406,6 +419,22 @@ class LibraryTools:
         keywords = " ".join(_list(keywords))
         return " ".join([str(name or ""), " ".join(_list(genres)), keywords, keywords,
                          " ".join(p["name"] for p in self._people(people, cast=5)), str(overview or "")])
+
+    def use_embeddings(self, store: TitleEmbeddings, embed: Callable[[list[str]], np.ndarray]) -> None:
+        """Search by meaning from now on: `store`'s title embeddings, and `embed` for queries (e.g. OllamaClient.embed)"""
+        E = store.matrix(self.titles.index)
+        self._embed, self._E = embed, E
+
+    def _meaning(self, query: str, mask: np.ndarray, ids: np.ndarray) -> Optional[pd.Series]:
+        """How close each allowed title is to the query in meaning, scaled to the best; None without embeddings"""
+        E, embed = self._E, self._embed
+        if E is None or embed is None or not (query or "").strip():
+            return None
+        try:
+            q = embed([QUERY_INSTRUCTION + query])[0]
+        except Exception:       # host gone mid-conversation: the word match still works
+            return None
+        return self._scaled(pd.Series(np.clip(E[mask] @ q, 0, None), index=ids))
 
     @staticmethod
     def _scaled(score: pd.Series) -> pd.Series:

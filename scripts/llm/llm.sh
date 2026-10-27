@@ -7,18 +7,20 @@
 #   scripts/llm/llm.sh start              # on this machine
 #   scripts/llm/llm.sh start gpu-box      # on another machine over ssh (this script is sent along; no repo needed)
 #
-# env: EMBRACE_LLM_PORT (default 11435), EMBRACE_LLM_MODEL (default qwen3:8b - pulled on first start)
+# env: EMBRACE_LLM_PORT (default 11435), EMBRACE_LLM_MODEL (default qwen3:8b), EMBRACE_EMBED_MODEL (default
+#      qwen3-embedding:0.6b, for search by meaning) - both pulled on first start
 # see docs/modules/chat.md
 set -euo pipefail
 
 ACTION=${1:-status}
 REMOTE=${2:-}
 if [ -n "$REMOTE" ]; then
-    exec ssh "$REMOTE" "EMBRACE_LLM_PORT=${EMBRACE_LLM_PORT:-} EMBRACE_LLM_MODEL=${EMBRACE_LLM_MODEL:-} bash -s -- $ACTION" < "$0"
+    exec ssh "$REMOTE" "EMBRACE_LLM_PORT=${EMBRACE_LLM_PORT:-} EMBRACE_LLM_MODEL=${EMBRACE_LLM_MODEL:-} EMBRACE_EMBED_MODEL=${EMBRACE_EMBED_MODEL:-} bash -s -- $ACTION" < "$0"
 fi
 
 PORT=${EMBRACE_LLM_PORT:-11435}
 MODEL=${EMBRACE_LLM_MODEL:-qwen3:8b}
+EMBED_MODEL=${EMBRACE_EMBED_MODEL:-qwen3-embedding:0.6b}
 STATE_DIR="$HOME/.cache/embrace-llm"
 PID_FILE="$STATE_DIR/ollama.pid"
 LOG_FILE="$STATE_DIR/ollama.log"
@@ -81,10 +83,12 @@ start() {
         tail -5 "$LOG_FILE" >&2
         exit 1
     fi
-    if ! OLLAMA_HOST="$LOCAL" "$ollama" show "$MODEL" >/dev/null 2>&1; then
-        echo "Pulling $MODEL (first start only)..."
-        OLLAMA_HOST="$LOCAL" "$ollama" pull "$MODEL"
-    fi
+    for m in "$MODEL" "$EMBED_MODEL"; do
+        if ! OLLAMA_HOST="$LOCAL" "$ollama" show "$m" >/dev/null 2>&1; then
+            echo "Pulling $m (first start only)..."
+            OLLAMA_HOST="$LOCAL" "$ollama" pull "$m"
+        fi
+    done
     # load the model now, so the first message isn't slow
     curl -fsS -m 300 "$LOCAL/api/generate" -d "{\"model\": \"$MODEL\", \"keep_alive\": \"15m\"}" >/dev/null
     status

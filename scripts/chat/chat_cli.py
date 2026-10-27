@@ -11,7 +11,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from chat import ChatSession, LibraryTools, LLMUnavailable, OllamaClient, tmdb_lookup
+from chat import ChatSession, LibraryTools, LLMUnavailable, OllamaClient, TitleEmbeddings, tmdb_lookup
 from connectors import TMDBConnector
 from ml import PreProcess, Recommender
 
@@ -37,6 +37,12 @@ def main():
     llm = OllamaClient()
     token = os.getenv("TMDB_READ_ACCESS_TOKEN")
     tools = LibraryTools(rec, runtimes=pp.get_title_runtimes(), lookup=tmdb_lookup(TMDBConnector(token)) if token else None)
+    embeddings = TitleEmbeddings(llm.embed_model)
+    try:        # search by meaning: embeds what isn't yet (all ~12k titles the first time: ~4 min)
+        embeddings.update(TitleEmbeddings.texts(tools.titles), llm.embed, log=lambda m: print(m))
+        tools.use_embeddings(embeddings, llm.embed)
+    except LLMUnavailable as e:
+        print(f"[INFO] search matches words only: {e}")
     session = ChatSession(llm, tools, user_id, args.user, log=print if args.tools else lambda _: None)
 
     questions = iter(args.ask) if args.ask else None

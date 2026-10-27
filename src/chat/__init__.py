@@ -4,5 +4,6 @@ Chat package: the conversational recommender - an LLM (Ollama) with tools over t
 from .llm import OllamaClient, LLMUnavailable
 from .tools import LibraryTools, tmdb_lookup
 from .session import ChatSession
+from .embeddings import TitleEmbeddings
 
-__all__ = ["OllamaClient", "LLMUnavailable", "LibraryTools", "tmdb_lookup", "ChatSession"]
+__all__ = ["OllamaClient", "LLMUnavailable", "LibraryTools", "tmdb_lookup", "ChatSession", "TitleEmbeddings"]

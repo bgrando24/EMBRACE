@@ -1,6 +1,7 @@
 import os
 from typing import Iterable, Optional
 
+import numpy as np
 import requests
 
 # a model that supports tool calling and fits an 8 GB GPU with room for an 8k context (see docs/modules/chat.md)
@@ -12,6 +13,14 @@ DEFAULT_HOSTS = f"http://localhost:{DEFAULT_PORT}"
 DEFAULT_NUM_CTX = 8192
 # how long the model stays in (GPU) memory after the last message
 DEFAULT_KEEP_ALIVE = "15m"
+# text embeddings for search by meaning (see docs/modules/chat.md): small, so fast enough on the CPU
+DEFAULT_EMBED_MODEL = "qwen3-embedding:0.6b"
+# embeddings run on the CPU (Ollama's num_gpu = layers on the GPU), leaving the GPU to the chat model: on an 8 GB GPU
+# with a desktop using ~1.3 GB, the two didn't fit together, and Ollama put 16% of qwen3:8b on the CPU, making answers
+# ~7x slower (Oct 2026). On the CPU (i7-10700K) a query takes ~60 ms
+EMBED_NUM_GPU = 0
+# texts per embedding request
+EMBED_BATCH = 64
 
 
 class LLMUnavailable(Exception):
@@ -48,6 +57,7 @@ class OllamaClient:
             hosts = hosts.split(",")
         self.hosts = [h.strip().rstrip("/") for h in hosts if h.strip()]
         self.model = model or os.getenv("EMBRACE_LLM_MODEL") or DEFAULT_MODEL
+        self.embed_model = os.getenv("EMBRACE_EMBED_MODEL") or DEFAULT_EMBED_MODEL
         self.num_ctx = int(num_ctx or os.getenv("EMBRACE_LLM_NUM_CTX") or DEFAULT_NUM_CTX)
         self.keep_alive = os.getenv("EMBRACE_LLM_KEEP_ALIVE") or DEFAULT_KEEP_ALIVE
         self.think = think
@@ -103,3 +113,41 @@ class OllamaClient:
             self.host = host
             return r.json()["message"]
         raise LLMUnavailable("The LLM host stopped answering")
+
+    def embed(self, texts: list[str]) -> np.ndarray:
+        """
+        Text embeddings from `embed_model` (https://github.com/ollama/ollama/blob/main/docs/api.md#generate-embeddings),
+        on the same hosts as `chat()`.
+
+        Returns:
+            ndarray: one L2-normalised float32 row per text, so dot products are cosine similarities
+
+        Raises:
+            LLMUnavailable: no host is up, or the embedding model isn't pulled on the one that is
+        """
+        out = []
+        for i in range(0, len(texts), EMBED_BATCH):
+            body = {"model": self.embed_model, "input": texts[i:i + EMBED_BATCH], "keep_alive": self.keep_alive,
+                    "options": {"num_gpu": EMBED_NUM_GPU}}
+            out.extend(self._post("/api/embed", body, self.embed_model)["embeddings"])
+        e = np.asarray(out, dtype=np.float32).reshape(len(out), -1)
+        return e / np.maximum(np.linalg.norm(e, axis=1, keepdims=True), 1e-12)
+
+    def _post(self, path: str, body: dict, model: str) -> dict:
+        """POST to the remembered host, or the first one up; raises LLMUnavailable like `chat()`"""
+        for attempt in range(2):
+            host = self.host if attempt == 0 and self.host else self.find_host()
+            if host is None:
+                raise LLMUnavailable("No LLM host is running (tried " + ", ".join(self.hosts) + ")")
+            try:
+                r = requests.post(f"{host}{path}", json=body, timeout=self.timeout)
+            except requests.ConnectionError:
+                self.host = None
+                continue
+            if r.status_code == 404:
+                raise LLMUnavailable(f"Model {model} isn't pulled on {host} (scripts/llm/llm.sh start pulls it)")
+            r.raise_for_status()
+            self.host = host
+            return r.json()
+        raise LLMUnavailable("The LLM host stopped answering")
+

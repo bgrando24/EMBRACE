@@ -31,7 +31,7 @@ use the wide one.
 
 | Tool | What it does |
 | --- | --- |
-| `search_library` | Text search (TF-IDF, words and two-word phrases) over each title's name, genres, TMDB keywords, cast/crew and plot, for moods and descriptions. Words that ask for a genre ("funny", "comedy", "scary", "thriller", "sci-fi"...: `GENRE_WORDS`) also count: the share of those genres a title has is averaged with the text match, so "funny small town show" gives comedies, not every show that mentions a small town. With `like` (a title the user liked), that's averaged with the similarity to the `like` title, each scaled to its best match: one call does "like X, but ...", which a small model handles much better than combining two tool results itself. Last, the IMDb rating nudges the order (`QUALITY_WEIGHT`, 20%; the rating weighted by its vote count), so that of thousands of equally good matches the well-rated go first, not obscure ones. Words like "movie" or "show" are left out of the text match: `kind` says that. |
+| `search_library` | Search by meaning and by words (see [Search by meaning](#search-by-meaning)), over each title's name, genres, TMDB keywords, cast/crew and plot, for moods and descriptions. The word part is TF-IDF over words and two-word phrases. Words that ask for a genre ("funny", "comedy", "scary", "thriller", "sci-fi"...: `GENRE_WORDS`) also count: the share of those genres a title has is averaged with the text match, so "funny small town show" gives comedies, not every show that mentions a small town. With `like` (a title the user liked), that's averaged with the similarity to the `like` title, each scaled to its best match: one call does "like X, but ...", which a small model handles much better than combining two tool results itself. Last, the IMDb rating nudges the order (`QUALITY_WEIGHT`, 20%; the rating weighted by its vote count), so that of thousands of equally good matches the well-rated go first, not obscure ones. Words like "movie" or "show" are left out of the text match: `kind` says that. |
 | `similar_titles` | `ContentKNN` neighbours of a title (keywords, people, plot, genre, MovieLens), with what they have in common. |
 | `title_info` | One title's plot, genres, keywords, crew and cast, whether it's on the server, and whether you've watched it. |
 | `my_recommendations` | Your daily picks (`Recommender.picks()`): `fresh` or `back_catalogue`, on the server; or `to_request`, titles not on the server worth requesting (`Recommender.to_request()`). |
@@ -88,12 +88,52 @@ might start it on. When none is running, it replies with how to start one.
 
 Default `qwen3:8b`: it calls tools reliably and fits an 8 GB GPU with an 8k-token context (about 5.2 GB of weights).
 Set `EMBRACE_LLM_MODEL` to try others: the model must support tools in Ollama (see the "tools" tag on
-ollama.com/library), and the same name must be set for `llm.sh` (which pulls it) and for the bot. Thinking mode is
+ollama.com/library), and the same name must be set for `llm.sh` (which pulls it) and for the bot. `llm.sh` also pulls the embedding model
+(`EMBRACE_EMBED_MODEL`, see [Search by meaning](#search-by-meaning)). Thinking mode is
 off: on test questions it made answers about 4x slower (about 37 s vs 8 s on an M4 Pro) without choosing better
 titles or tools.
 
-Speed, measured Oct 2026: about 8 s per answer on an M4 Pro, about 3 s on an RTX 3070 Ti (8 GB; the model plus
-context use about 6.8 GB). The first answer after the model was unloaded adds its loading time (up to ~30 s).
+Speed, measured Oct 2026: about 8 s per answer on an M4 Pro, and 3-6 s on an RTX 3070 Ti (8 GB). The first answer
+after the model was unloaded adds its loading time (up to ~30 s).
+- **What sets the 3070 Ti's speed:** the model and an 8k-token context need ~6.0 GB. Whatever else uses the GPU
+  (the desktop, Steam...) decides whether that all fits. When it doesn't, Ollama puts part of the model on the CPU
+  (`ollama ps` shows e.g. `9%/91% CPU/GPU`), and answers slow down.
+- **8-bit context cache:** `llm.sh` stores the context's cache at 8 bits (`OLLAMA_KV_CACHE_TYPE=q8_0`, with flash
+  attention), half the memory of 16 bits. With ~1.3 GB used by other apps, that took answers from 7.5-10 s to 4.5-6 s.
+- **Why the context stays at 8k:** a 7-turn conversation reached ~6,800 prompt tokens, since the last 6 exchanges are
+  kept with their tool results.
+
+### Search by meaning
+
+Word matching can't tell that "mind-bending sci-fi" means Interstellar, or that "cozy feel-good show" means Schitt's
+Creek and not a horror film called *Us*. So search also compares meanings, with text embeddings
+(`EMBRACE_EMBED_MODEL`, default `qwen3-embedding:0.6b`) from the same Ollama host as the chat model:
+- **What's embedded:** each title's text (`chat.embeddings.title_text()`): name, year, movie or series, genres,
+  keywords, director or creator, the top 4 cast, and the plot.
+- **Where it's kept:** `data/cache/title_embeddings_<model>.parquet` (`TitleEmbeddings`), stored with a hash of
+  that text, so a title is only embedded again when its details change.
+- **Queries:** each one is embedded at question time, with the instruction Qwen3-Embedding expects in front.
+- **Ranking:** a query's match is 75% meaning and 25% words (`SEMANTIC_WEIGHT`). Words still catch names and exact
+  phrases. Genre words and `like` then count as before.
+
+Made by the LLM host, not the nightly refresh: the bot needs that host to answer anyway, and the refresh then never
+depends on it being on.
+- **First run:** after loading its data, and after each answer, the bot embeds whatever isn't yet, in the
+  background. All ~12k titles take about 40 minutes on bg-server's CPU; after that, only new or changed titles
+  (seconds).
+- **Until then,** or if the host stops mid-conversation, search matches words only. `status` says which.
+
+Why this model, on the CPU:
+- **The GPU stays the chat model's.** Embeddings run on the CPU (`EMBED_NUM_GPU = 0`). On bg-server's 8 GB GPU,
+  with the desktop using ~1.3 GB, the embedding model and `qwen3:8b` didn't fit together. Ollama then put 16% of
+  the chat model on the CPU, and answers took 20-25 s instead of ~3 s.
+- **Size:** the 0.6b version embeds a query in ~60 ms on the CPU (i7-10700K). The 4b and 8b versions gave no
+  better picks in testing and would be much slower there.
+- **Quality:** on ten typical queries, it already beat word search on every vague one, e.g. "epic fantasy with
+  dragons and politics" went from Lord of the Rings films to House of the Dragon and Game of Thrones.
+
+Not for the daily picks: blending embeddings into the picks' model was tested at every size and weight, and never
+beat it ([ML: tried and not adopted](ml.md#evaluation-mlevaluate)).
 
 ## The Discord bot: `scripts/chat/discord_bot.py`
 
@@ -136,13 +176,13 @@ PYTHONPATH=src python scripts/chat/chat_cli.py --user <emby name> --ask "a heist
 ```
 
 `--tools` prints each tool call. Set `EMBRACE_LLM_HOSTS` to the machine running the LLM (default
-`http://localhost:11435`).
+`http://localhost:11435`). It embeds any titles that aren't yet before the first question, so the first run
+takes a few minutes longer.
 
 ## Limits and next steps
 
-- **Search is word-based.** "Canadian" doesn't match the keyword "canada"; the model is told to search with several
-  descriptive keywords and retry, which mostly covers it. Embedding search (semantic matching, computed by the same
-  Ollama) is the planned improvement, together with richer per-title tags (README goal 2).
+- **Search by meaning is only as good as each title's text** (TMDB's keywords and plot). Richer per-title tags,
+  such as tone, pacing and style of humour (README goal 2), are the planned next step.
 - **Titles beyond the server are the well-known ones** (TMDB's recommendations for the library, and 25,000+ IMDB
   votes); anything else is only reachable by name (looked up on TMDB). A Jellyseerr "request this" button is on the
   roadmap.

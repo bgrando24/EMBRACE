@@ -23,6 +23,8 @@ class ContentKNN(CosineKNN):
         tmdb_recs    TMDB's "people who liked this also liked" list for the title, plus the title itself: two titles are
                      similar when TMDB recommends one alongside the other, or recommends the same titles for both -
                      a collaborative signal from TMDB's users, including titles not on our server
+        style        how the title feels to watch: LLM-picked tags such as "mood: dark" or "pacing: slow-burn" (see
+                     `ml.style_tags`), for the titles tagged so far
         movielens    the MovieLens users who liked the movie (rated 4+, see `PreProcess.get_movielens_likers()`):
                      two movies are similar when the same people liked both - collaborative filtering from 200k
                      MovieLens users. Movies up to Oct 2023 only; series and newer movies have an empty block
@@ -40,9 +42,11 @@ class ContentKNN(CosineKNN):
     # - movielens at 0.3 (the content blocks scaled to the remaining 0.7): hit@10 0.112 -> 0.135, MRR 0.059 -> 0.070,
     #   and next-watch MRR 0.182 -> 0.202; MRR rose steadily from 0.1 to 0.5 in both evaluations
     # - tmdb_recs: no measurable gain at 0.1-0.3 in either evaluation, so off (the data is still fetched)
+    # - style: worse at 0.1-0.3 in leave-one-out (MRR 0.070 -> 0.025-0.036), no better next-watch, so off
     # Re-check as history grows.
     DEFAULT_WEIGHTS = {
         "genre": 0.035, "keywords": 0.28, "people": 0.245, "description": 0.14, "tmdb_recs": 0.0, "movielens": 0.3,
+        "style": 0.0,
     }
     # blocks shown in explanations, in this order (description words are too noisy to read as a reason; genres go
     # last as they're shared by so many titles)
@@ -52,7 +56,8 @@ class ContentKNN(CosineKNN):
         """
         Args:
             content (DataFrame): output of `PreProcess.get_title_content()` - one row per title with OUTPUT_COLS,
-                `genres`, `keywords`, `collection`, `original_language`, `people` (list of {id, name, role}), `overview`
+                `genres`, `keywords`, `collection`, `original_language`, `people` (list of {id, name, role}), `overview`,
+                and optionally `style` (tokens, `StyleTags.attach()`)
             weights (dict, optional): block -> weight - DEFAULT: DEFAULT_WEIGHTS. A block can be switched off with 0.
         """
         self.weights = {**self.DEFAULT_WEIGHTS, **(weights or {})}
@@ -82,6 +87,7 @@ class ContentKNN(CosineKNN):
                     content.get("tmdb_id", pd.Series([None] * len(content))),
                 )
             ],
+            "style": [list(s) if isinstance(s, list) else [] for s in content.get("style", pd.Series([None] * len(content)))],
         }
 
         self._blocks: dict[str, sp.csr_matrix] = {}

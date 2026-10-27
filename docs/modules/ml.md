@@ -151,7 +151,7 @@ profiles.recommend(user_id, n=10, allowed=pp.get_library_imdb_ids())
 
 - Per-session completion isn't used: a movie watched over three evenings is three "partial" sessions, but was finished. Movies with no known runtime assume 2 hours.
 - The log for series keeps one long binge from drowning out everything else, while still counting it the most.
-- Titles under 0.1 (e.g. a movie opened for a few minutes) are left out of the profile, but like everything else the user has watched, they're never recommended back. There are no negative signals: abandoning one title says little about its genres.
+- Titles under 0.1 (e.g. a movie opened for a few minutes) are left out of the profile, but like everything else the user has watched, they're never recommended back. Titles the user gave up on aren't counted against the profile: that was tried and didn't help (see [Evaluation](#evaluation-mlevaluate)).
 - Titles the model doesn't cover are skipped; `users()` shows how many titles shape each profile. `ContentKNN` covers 989 of 999 watched hours (Oct 2026); `GenreKNN` skips IMDB types other than movie/tvSeries/tvMiniSeries (e.g. `tvMovie`).
 
 **`because_you_watched`** on each recommendation is the most similar profile title, ties going to the higher-interest title (None if nothing is shared), and **`shared`** is what the two have in common. It deliberately ignores interest otherwise, or a long binge would "explain" anything that shares one genre with it. Example: The Dark Knight Rises, because you watched The Dark Knight: `[Jonathan Nolan, Christian Bale, Christopher Nolan, ...]`.
@@ -222,6 +222,11 @@ realism, story type and audience from a fixed vocabulary (`scripts/llm/tag_title
 MRR fell from 0.070 to 0.025-0.036, worse beyond noise at every weight, and the time-aware evaluation was no better.
 The model leaned on a few tags ("character-driven", "measured", "emotional") for most titles. Letting it think first
 gave better tags at ~8x the time; a bigger model is the other thing left to try.
+
+Also tried and not adopted (Oct 2026): **counting titles people gave up on against their profile** (`abandoned()`, `UserProfiles(negative_weight=...)`, off by default).
+- **What counts as given up:** a movie stopped before half of it, or a series left after 1-2 episodes, and untouched for 2 weeks (movies) or a month (series) since, so a title still in progress doesn't count. There were about 60 such titles (1-12 per person), against ~200 clearly liked.
+- **Whether liked titles rank higher:** subtracting them at 0.1-1.0 (with or without the barely opened, under 5%) moved neither evaluation beyond noise: next-watch MRR at best +0.008 (-0.004 to +0.023).
+- **Whether given-up titles rank lower:** held out one at a time, they ranked around the middle (47th percentile, where liked titles are near the 31st) with or without the others subtracted, at best 1.4 points lower (-3.4 to +0.3). People give up on titles for reasons the features don't capture (mood, a quick check, seen elsewhere), not for being like other titles they gave up on.
 
 Results, Oct 2026 (566 candidates, 178 held out, profiles including Emby played flags):
 
@@ -318,6 +323,10 @@ Evaluated on 195 requests (Dec 2025 - Oct 2026, 5 requesters):
 - **`to_request`** (only with `n_request`, and discovery titles loaded): taste alone over the titles NOT on the server, from `to_request()`. It leaves out:
     - titles anyone has already requested in Jellyseerr (they're on their way);
     - titles rated below `REQUEST_MIN_RATING` (6.5) on IMDb, or with fewer than `REQUEST_MIN_VOTES` (5,000) votes. TMDB's recommendations include obscure and poorly rated titles; the first live run listed a 3.4 from 330 votes.
+
+**No repeats within a list** (`diversify()`): each list has at most one title per franchise (TMDB collection), and none with a similarity of `NEAR_DUPLICATE_SIMILARITY` (0.5) or more to a title above it in the list, which catches spin-offs and remakes without a collection. Each list is ranked from three times as many candidates (`DIVERSITY_POOL`), so a title left out is replaced by the next best.
+- **How often it matters:** rarely. In Oct 2026's 18 lists it changed one: a back catalogue with The Conjuring and The Conjuring 2. Other titles in a list were 0.37 similar at most.
+- **What it costs:** nothing measurable. The time-aware evaluation was identical, and leave-one-out had 2 fewer hits of 184, when someone did go on to watch a franchise's next film. That film can come back once the first is watched.
 
 Columns: `list`, `rank`, `t_const`, `primary_name`, `start_year`, `type`, `similarity`, `score`, `because_you_watched`, `shared`, `added_days_ago`, `you_requested`.
 

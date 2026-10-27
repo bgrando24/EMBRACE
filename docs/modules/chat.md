@@ -93,8 +93,15 @@ ollama.com/library), and the same name must be set for `llm.sh` (which pulls it)
 off: on test questions it made answers about 4x slower (about 37 s vs 8 s on an M4 Pro) without choosing better
 titles or tools.
 
-Speed, measured Oct 2026: about 8 s per answer on an M4 Pro, about 3 s on an RTX 3070 Ti (8 GB; the model plus
-context use about 6.8 GB). The first answer after the model was unloaded adds its loading time (up to ~30 s).
+Speed, measured Oct 2026: about 8 s per answer on an M4 Pro, and 3-6 s on an RTX 3070 Ti (8 GB). The first answer
+after the model was unloaded adds its loading time (up to ~30 s).
+- **What sets the 3070 Ti's speed:** the model and an 8k-token context need ~6.0 GB. Whatever else uses the GPU
+  (the desktop, Steam...) decides whether that all fits. When it doesn't, Ollama puts part of the model on the CPU
+  (`ollama ps` shows e.g. `9%/91% CPU/GPU`), and answers slow down.
+- **8-bit context cache:** `llm.sh` stores the context's cache at 8 bits (`OLLAMA_KV_CACHE_TYPE=q8_0`, with flash
+  attention), half the memory of 16 bits. With ~1.3 GB used by other apps, that took answers from 7.5-10 s to 4.5-6 s.
+- **Why the context stays at 8k:** a 7-turn conversation reached ~6,800 prompt tokens, since the last 6 exchanges are
+  kept with their tool results.
 
 ### Search by meaning
 

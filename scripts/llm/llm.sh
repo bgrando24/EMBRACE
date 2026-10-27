@@ -72,7 +72,11 @@ start() {
         ollama=/snap/ollama/current/bin/ollama
     fi
     echo "$(date '+%F %T') starting $ollama on 0.0.0.0:$PORT" >>"$LOG_FILE"
-    OLLAMA_HOST="0.0.0.0:$PORT" nohup "$ollama" serve </dev/null >>"$LOG_FILE" 2>&1 &
+    # the context's cache at 8 bits rather than 16 (needs flash attention): half the memory, no noticeable loss. On an
+    # 8 GB GPU that a desktop also uses (~1.3 GB), qwen3:8b with an 8k context didn't fit otherwise, and Ollama put 16%
+    # of it on the CPU (answers ~3x slower)
+    OLLAMA_HOST="0.0.0.0:$PORT" OLLAMA_FLASH_ATTENTION=1 OLLAMA_KV_CACHE_TYPE=q8_0 \
+        nohup "$ollama" serve </dev/null >>"$LOG_FILE" 2>&1 &
     echo $! >"$PID_FILE"
     for _ in $(seq 1 30); do
         up && break

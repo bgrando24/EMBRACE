@@ -203,6 +203,11 @@ Metrics, where higher is better:
 - **MRR:** mean reciprocal rank
 - **AUC:** the share of other candidates ranked below the hidden title; 0.5 is random order
 
+**Is a difference real?** The output gives each hit@10 and MRR with a 95% interval (`bootstrap_ci()`, from resampling the held-out titles). Each model's MRR is also compared with the default model's on the same held-out titles (`paired_difference()`), marked `*` when that interval excludes 0. Use the paired comparison to judge a change. Pairing cancels out which titles happened to be held out, so it detects much smaller differences than comparing two intervals does. In Oct 2026 the default's hit@10 was 0.138, with an interval of 0.088-0.193.
+- **Example:** "people only" tied with the full model on MRR (+0.001, interval -0.017 to +0.023), while every other single block was worse.
+
+**Tried and not adopted** (Oct 2026): scoring a candidate other than by its similarity to the summed profile. The variants were its closest profile title, its 10 closest, power means that lean towards the closest, and profiles that weight recent watches more. None did better in either evaluation. The summed profile had the best leave-one-out hit@10, and with the freshness boost every variant reached hit@10 ~0.375.
+
 Results, Oct 2026 (566 candidates, 178 held out, profiles including Emby played flags):
 
 | Model | hit@10 | MRR | AUC |
@@ -311,7 +316,8 @@ Runs after the refresh (see [Scheduled Jobs](../workflows/cron_jobs.md)):
   - **Missing S1E1:** a show whose S1E1 isn't on the server is left out, and the next pick takes its place.
   - **Anthologies:** shows TMDB tags `anthology`, where each season stands alone, may start at episode 1 of their earliest season.
 - **Discord preview:** a summary of everyone's top 3 per list goes to `DISCORD_WEBHOOK_URL`. It also shows each user's 5 titles to request (`-r`, 0 for none), each linked to its page on `JELLYSEERR_URL` (TMDB's without it). These have no playlist, as Emby playlists only hold titles on the server.
-- **Log:** every pick is appended to [`recommendation_log`](../databases/sqlite.md#recommendation-log), so later watch history can show which picks were actually watched.
+- **Log:** every pick is appended to [`recommendation_log`](../databases/sqlite.md#recommendation-log), so later watch history can show which picks were actually watched (see [Pick outcomes](#pick-outcomes-mloutcomes)).
+- **Weekly report:** on Mondays the preview ends with how earlier picks did, one line per list, e.g. "new: 4 of 30 watched (13%, 3.1x a random title), 2 liked".
 - **Opt-out:** users named in `EMBRACE_PICKS_EXCLUDE_USERS` get no playlists, and their picks are left out of the preview.
 
 ```sh
@@ -319,3 +325,25 @@ PYTHONPATH=src python scripts/picks/daily_picks.py --dry-run     # print everyon
 PYTHONPATH=src python scripts/picks/daily_picks.py --users NAME  # one user only
 PYTHONPATH=src python scripts/picks/daily_picks.py -r 0          # no titles to request
 ```
+
+## Pick outcomes: `ml.outcomes`
+
+What happened to the picks people were actually shown, from `recommendation_log`. `ml.evaluate` can only replay history, and it can't judge titles off the server at all.
+
+```sh
+PYTHONPATH=src python -m ml.outcomes [--window 14] [--by-user]
+```
+
+`pick_outcomes(log, user_titles, requests, freshness)` gives one row per (user, list, title), however many days it was shown:
+- **Window:** from the first day the title was shown to `WINDOW_DAYS` (14) after the last.
+- **`watched`:** started in the window.
+- **`liked`:** watched, with interest of at least 0.8, the evaluation's bar (80% of a movie, about 1.5 hours of a series).
+- **`requested`:** requested in Jellyseerr by that user in the window, for titles to request.
+- **`pending`:** the window hasn't closed yet. `summarise_outcomes()` only counts closed windows in its rates. Counting the picks watched early but not the rest would inflate them. Open windows are shown separately (`open`, `open_watched`).
+
+**Lift.** New arrivals get watched whatever is recommended, so a raw rate says little. Each pick is compared with a random title: the share of titles on the server the user hadn't watched that they started in the same window. `lift` is watched divided by that expectation, so 3.0 means picks were watched three times as often as chance.
+- Lift is large in absolute terms, because people start only a few of hundreds of titles in any fortnight.
+- Use it to compare lists, and the same list before and after a change.
+
+Picks have been logged since 24 Oct 2026, so the first windows close in Nov 2026.
+

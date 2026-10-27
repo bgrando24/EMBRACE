@@ -1,7 +1,8 @@
 """
 Daily picks: each user's recommendations as two private Emby playlists ("Fresh for you", "From the back catalogue"),
 plus a preview of everyone's picks to the Discord webhook, with titles NOT on the server worth requesting (no playlist:
-Emby's only hold what the server has; linked to their Jellyseerr page). Each run is appended to `recommendation_log`.
+Emby's only hold what the server has; linked to their Jellyseerr page). Each run is appended to `recommendation_log`;
+on Mondays the preview also says how earlier picks did (`ml.outcomes`).
 Runs after the nightly refresh (scripts/systemd/embrace-picks.service); see docs/workflows/cron_jobs.md.
 
 usage (from project root): PYTHONPATH=src python scripts/picks/daily_picks.py [--dry-run] [--no-emby] [--no-discord]
@@ -18,7 +19,8 @@ import pandas as pd
 from dotenv import load_dotenv
 
 from connectors import EmbyConnector
-from ml import PreProcess, Recommender
+from ml import Freshness, PreProcess, Recommender
+from ml.outcomes import WINDOW_DAYS, pick_outcomes, report_lines, summarise_outcomes
 from ml.picks import BACK_CATALOGUE, FRESH, TO_REQUEST
 from utils import Notifications
 
@@ -31,6 +33,8 @@ LIST_LABELS = {FRESH: "new", BACK_CATALOGUE: "back catalogue", TO_REQUEST: "to r
 # picks per list shown in the Discord preview (the playlists get all of them); every title to request is shown, as no
 # playlist holds them
 PREVIEW_PER_LIST = 3
+# the preview reports how earlier picks did on this day of the week (0 = Monday)
+REPORT_WEEKDAY = 0
 tz = ZoneInfo("Australia/Melbourne")
 
 
@@ -86,6 +90,18 @@ def preview(picks: pd.DataFrame, statuses: dict[str, str], when: datetime, pages
         # one "line" per user, so a message too long for Discord is split between users, never within one
         lines.append("\n".join(user))
     return lines
+
+
+def outcome_lines(pp: PreProcess, users: set[str]) -> list[str]:
+    """How earlier picks did, for the users getting picks, over the picks whose window has closed (see ml.outcomes)"""
+    log = pp.sqlite.get_recommendation_log()
+    log = log[log["user_id"].isin(users)] if not log.empty else log
+    user_titles, _ = pp.get_user_title_stats()
+    picks = pick_outcomes(log, user_titles, pp.get_user_requests(), Freshness(pp.get_title_additions()))
+    lines = report_lines(summarise_outcomes(picks), LIST_LABELS)
+    if not lines:
+        return []
+    return [f"**How earlier picks did** (watched or requested within {WINDOW_DAYS} days):"] + [f"  {line}" for line in lines]
 
 
 def main():
@@ -147,6 +163,11 @@ def main():
         print("[WARN] recommendations were not logged", file=sys.stderr)
 
     lines = preview(picks, statuses, started, pages)
+    if started.weekday() == REPORT_WEEKDAY:
+        try:
+            lines += outcome_lines(pp, set(names))
+        except Exception as e:     # the report is extra: it never stops the picks going out
+            print(f"[WARN] outcomes report failed: {type(e).__name__}: {e}", file=sys.stderr)
     if failures:
         lines.append(f"Playlist updates FAILED for {failures} user(s), see the journal")
     if notify:

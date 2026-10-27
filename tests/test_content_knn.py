@@ -4,7 +4,8 @@ import numpy as np
 import pandas as pd
 
 from ml import ContentKNN, UserProfiles
-from ml.evaluate import leave_one_out, popularity_ranker, profile_ranker, summarise, weight_grid
+from ml.evaluate import (bootstrap_ci, leave_one_out, paired_difference, popularity_ranker, profile_ranker, summarise,
+                         weight_grid, with_intervals)
 
 
 def person(pid, name, role="cast"):
@@ -107,6 +108,22 @@ class TestEvaluate(unittest.TestCase):
         self.assertAlmostEqual(s["mrr"], (1 / 2 + 1 / 5) / 2)
         n = len(scope) - 2
         self.assertAlmostEqual(s["auc"], np.mean([(n - 2) / (n - 1), (n - 5) / (n - 1)]))
+
+    def test_intervals_and_paired_difference(self):
+        def results(ranks):
+            return pd.DataFrame({"user_name": "u", "imdb_id": [f"tt{i}" for i in range(len(ranks))],
+                                 "rank": ranks, "n_ranked": 100})
+        a, b = results([1, 2, 1, 4] * 25), results([2, 4, 2, 8] * 25)       # a ranks every title higher
+        lo, hi = bootstrap_ci(a, "mrr")
+        self.assertLess(lo, summarise(a)["mrr"])
+        self.assertGreater(hi, summarise(a)["mrr"])
+        d, lo, hi = paired_difference(a, b)
+        self.assertAlmostEqual(d, summarise(a)["mrr"] - summarise(b)["mrr"])
+        self.assertGreater(lo, 0)                                            # consistently better: not noise
+        d, lo, hi = paired_difference(a, a)
+        self.assertEqual((d, lo, hi), (0.0, 0.0, 0.0))
+        table = with_intervals({"base": b, "new": a}, "base")
+        self.assertTrue(table.loc["new", "mrr vs base"].endswith("*"))
 
     def test_weight_grid_sums_to_one(self):
         grid = weight_grid(0.5)

@@ -15,6 +15,9 @@ Metrics (higher is better):
     mrr      mean reciprocal rank (1 for rank 1, 0.5 for rank 2, ...)
     auc      share of other candidates ranked below the held-out title (0.5 = random order)
 
+Each metric comes with a 95% bootstrap interval (`bootstrap_ci()`), and each model is compared with the default on the
+same held-out titles (`paired_difference()`): a difference whose interval includes 0 is noise.
+
 Caveats: a few hundred held-out titles from a handful of people, so differences of a couple of points are noise; and
 people can only watch what's on the server, so "hidden title ranked high" is the best available proxy for "good
 recommendation", not the same thing.
@@ -186,12 +189,63 @@ def summarise(results: pd.DataFrame, k: int = 10) -> dict[str, float]:
     """hit@k, MRR and AUC over all held-out titles"""
     r = results["rank"].to_numpy(dtype=float)
     n = results["n_ranked"].to_numpy(dtype=float)
-    return {
-        "held_out": len(results),
-        f"hit@{k}": float(np.mean(r <= k)),
-        "mrr": float(np.mean(1 / r)),
-        "auc": float(np.mean((n - r) / np.maximum(n - 1, 1))),
-    }
+    return {"held_out": len(results), **{m: _metric(r, n, m, k) for m in (f"hit@{k}", "mrr", "auc")}}
+
+
+def _metric(rank: np.ndarray, n_ranked: np.ndarray, metric: str, k: int = 10) -> float:
+    if metric == f"hit@{k}":
+        return float(np.mean(rank <= k))
+    if metric == "mrr":
+        return float(np.mean(1 / rank))
+    if metric == "auc":
+        return float(np.mean((n_ranked - rank) / np.maximum(n_ranked - 1, 1)))
+    raise ValueError(f"unknown metric {metric}")
+
+
+def bootstrap_ci(results: pd.DataFrame, metric: str = "mrr", n: int = 1000, seed: int = 0) -> tuple[float, float]:
+    """
+    95% interval of a metric (hit@10, mrr or auc) from resampling the held-out titles. Titles are resampled, not
+    users: with 6 users, resampling users would mostly measure who's in the sample.
+    """
+    r, nr = results["rank"].to_numpy(dtype=float), results["n_ranked"].to_numpy(dtype=float)
+    idx = np.random.default_rng(seed).integers(0, len(r), size=(n, len(r)))
+    stats = [_metric(r[i], nr[i], metric) for i in idx]
+    return float(np.percentile(stats, 2.5)), float(np.percentile(stats, 97.5))
+
+
+def paired_difference(a: pd.DataFrame, b: pd.DataFrame, metric: str = "mrr", n: int = 1000,
+                      seed: int = 0) -> tuple[float, float, float]:
+    """
+    How much better model `a` is than model `b` on the same held-out titles (results of the same evaluation): the
+    difference in `metric` and its 95% bootstrap interval. Pairing removes the noise of which titles were held out,
+    so this is far more sensitive than comparing two intervals.
+    """
+    keys = ["user_name", "imdb_id"] + (["watched_at"] if "watched_at" in a and "watched_at" in b else [])
+    m = a.merge(b, on=keys, suffixes=("_a", "_b"))
+    ra, rb = m["rank_a"].to_numpy(dtype=float), m["rank_b"].to_numpy(dtype=float)
+    na, nb = m["n_ranked_a"].to_numpy(dtype=float), m["n_ranked_b"].to_numpy(dtype=float)
+    diff = _metric(ra, na, metric) - _metric(rb, nb, metric)
+    idx = np.random.default_rng(seed).integers(0, len(m), size=(n, len(m)))
+    stats = [_metric(ra[i], na[i], metric) - _metric(rb[i], nb[i], metric) for i in idx]
+    return diff, float(np.percentile(stats, 2.5)), float(np.percentile(stats, 97.5))
+
+
+def with_intervals(results: dict[str, pd.DataFrame], baseline: str) -> pd.DataFrame:
+    """`summarise()` per model, with 95% intervals for hit@10 and MRR, and the MRR difference from `baseline`"""
+    rows = {}
+    for name, res in results.items():
+        row = summarise(res)
+        for metric in ("hit@10", "mrr"):
+            lo, hi = bootstrap_ci(res, metric)
+            row[metric] = f"{row[metric]:.3f} ({lo:.3f}-{hi:.3f})"
+        row["auc"] = f"{row['auc']:.3f}"
+        if name != baseline and baseline in results:
+            d, lo, hi = paired_difference(res, results[baseline])
+            row[f"mrr vs {baseline}"] = f"{d:+.3f} ({lo:+.3f} to {hi:+.3f})" + (" *" if lo > 0 or hi < 0 else "")
+        rows[name] = row
+    out = pd.DataFrame(rows).T
+    out["held_out"] = out["held_out"].astype(int)
+    return out.fillna("")
 
 
 def weight_grid(step: float = 0.1) -> list[dict[str, float]]:
@@ -236,8 +290,8 @@ def main():
 
     print(f"Candidates: {len(scope)} titles. Held out: titles with interest >= {MIN_HELDOUT_INTEREST}.\n")
     results = {name: leave_one_out(r, user_titles, scope, scope) for name, r in models.items()}
-    summary = pd.DataFrame({name: summarise(res) for name, res in results.items()}).T
-    print(summary.round(3).to_string())
+    print("hit@10 and MRR with 95% intervals; * = the difference from the default model isn't noise\n")
+    print(with_intervals(results, "content").to_string())
 
     per_user = pd.DataFrame({
         name: res.groupby("user_name")["rank"].apply(lambda r: np.mean(r <= 10)) for name, res in results.items()
@@ -280,8 +334,8 @@ def main():
         temporal["content + fresh + own requests (defaults)"] = profile_ranker(
             content_knn, lambda when, user_id: freshness.boost(when).add(requests.boost(when, user_id), fill_value=0)
         )
-        rows = {name: summarise(next_watch(r, user_titles, scope, freshness)) for name, r in temporal.items()}
-        print(pd.DataFrame(rows).T.round(3).to_string())
+        results = {name: next_watch(r, user_titles, scope, freshness) for name, r in temporal.items()}
+        print(with_intervals(results, "content + fresh + own requests (defaults)").to_string())
 
 
 if __name__ == "__main__":

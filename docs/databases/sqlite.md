@@ -92,7 +92,7 @@ Read the details with `get_tmdb_title_details()`, or `PreProcess.get_title_conte
 
 ## Recommendation log
 
-`recommendation_log`: every pick the nightly job showed, one row per (`generated_at`, `user_id`, `list`, `rank`). `log_recommendations(picks, model)` appends a run, and rows are never rewritten.
+`recommendation_log`: every pick the nightly job showed, one row per (`generated_at`, `user_id`, `list`, `rank`). `log_recommendations(picks, model)` appends a run, and rows are never rewritten. `ml.outcomes` reads it to see which picks were watched or requested (see [ML: pick outcomes](../modules/ml.md#pick-outcomes-mloutcomes)).
 - **Columns:** `generated_at`, `user_id`, `list` (`fresh` / `back_catalogue`), `rank`, `t_const`, `item_id` (the Emby item put in the playlist), `score`, `similarity`, `because_you_watched`, `model`.
 - **Purpose:** comparing it with later watch history gives a real-world hit rate, alongside the offline evaluation in `ml.evaluate`.
 

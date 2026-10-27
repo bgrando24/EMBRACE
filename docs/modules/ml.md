@@ -215,6 +215,14 @@ evaluation most were measurably worse. What people here watch next follows who m
 liked and what just arrived, not what its plot is about. Embeddings are used for the chat-bot's search instead
 ([Chat: search by meaning](chat.md#search-by-meaning)).
 
+Also tried and not adopted (Oct 2026): **style tags**, how a title feels to watch (`ml.style_tags`, the `style`
+block, weight 0). An LLM (qwen3:8b) picked each library title's mood, pacing, humour, intensity, attention needed,
+realism, story type and audience from a fixed vocabulary (`scripts/llm/tag_titles.py`, cached in
+`data/cache/title_style.parquet`). Alone they barely beat random order (AUC 0.57). Blended at 10-30%, leave-one-out
+MRR fell from 0.070 to 0.025-0.036, worse beyond noise at every weight, and the time-aware evaluation was no better.
+The model leaned on a few tags ("character-driven", "measured", "emotional") for most titles. Letting it think first
+gave better tags at ~8x the time; a bigger model is the other thing left to try.
+
 Results, Oct 2026 (566 candidates, 178 held out, profiles including Emby played flags):
 
 | Model | hit@10 | MRR | AUC |

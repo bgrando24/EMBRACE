@@ -39,8 +39,8 @@ class TitleEmbeddings:
     An embedding per title, for search by meaning, cached in `data/cache/title_embeddings_<model>.parquet`. Each is
     stored with a hash of the text it was made from, so a title is embedded again only when its details change.
 
-    Made by the Ollama host that runs the chat model (`OllamaClient.embed`), not by the nightly refresh: the bot needs
-    that host to answer anyway, and the refresh then never depends on it being on.
+    Made by the LLM server that runs the chat model (`LLMClient.embed`), not by the nightly refresh: the bot needs
+    that server to answer anyway, and the refresh then never depends on it being on.
     """
 
     def __init__(self, model: str, directory: str = DEFAULT_DIR):

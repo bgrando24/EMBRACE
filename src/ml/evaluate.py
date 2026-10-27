@@ -37,6 +37,7 @@ from .cosine_knn import CosineKNN
 from .freshness import Freshness
 from .requests_signal import Requests
 from .genre_knn import GenreKNN
+from .style_tags import StyleTags
 from .preprocess import PreProcess
 from .user_profiles import MIN_INTEREST, title_interest
 
@@ -270,7 +271,7 @@ def main():
     pp = PreProcess(args.db)
     imdb = pp.imdb_get_encoded_genres()
     movielens = pp.get_movielens_likers() if Path(pp.MOVIELENS_DIR).exists() or Path("data/cache/movielens_likers.parquet").exists() else None
-    content = pp.get_title_content(imdb, movielens)
+    content = StyleTags().attach(pp.get_title_content(imdb, movielens))    # untagged titles have no style tokens
     user_titles, _ = pp.get_user_title_stats()
     # Emby's played flags fill in profiles (never held out - see leave_one_out)
     user_titles = pd.concat([user_titles, pp.get_played_titles(user_titles)], ignore_index=True)

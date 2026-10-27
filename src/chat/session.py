@@ -3,7 +3,7 @@ import re
 from datetime import date
 from typing import Callable, Optional
 
-from .llm import OllamaClient
+from .llm import LLMClient
 from .tools import LibraryTools
 
 # exchanges (a question, the tool calls it caused, and the answer) kept as context for follow-up questions
@@ -48,11 +48,11 @@ class ChatSession:
     suggested, which searches then leave out: a small model repeats its earlier picks otherwise, however it's told.
     """
 
-    def __init__(self, llm: OllamaClient, tools: LibraryTools, user_id: Optional[str], user_name: str,
+    def __init__(self, llm: LLMClient, tools: LibraryTools, user_id: Optional[str], user_name: str,
                  log: Callable[[str], None] = lambda _: None):
         """
         Args:
-            llm (OllamaClient): the model
+            llm (LLMClient): the model
             tools (LibraryTools): what it can look up
             user_id (str, optional): canonical Emby user ID the personal tools use (None: no personal data)
             user_name (str): what the model calls them
@@ -89,7 +89,7 @@ class ChatSession:
                     args = json.loads(args or "{}")
                 result = self.tools.call(name, args, self.user_id, exclude=self.suggested)
                 self.log(f"{name}({json.dumps(args, ensure_ascii=False)}) -> {len(result)} chars")
-                exchange.append({"role": "tool", "tool_name": name, "content": result})
+                exchange.append({"role": "tool", "tool_call_id": call.get("id"), "tool_name": name, "content": result})
         self.exchanges.append(exchange)
         answer = self.clean(exchange[-1]["content"])
         self.suggested |= self.picks_in(answer, exchange)

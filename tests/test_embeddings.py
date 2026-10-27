@@ -5,9 +5,9 @@ from unittest import mock
 import numpy as np
 import pandas as pd
 
-from chat import LLMUnavailable, OllamaClient, TitleEmbeddings
+from chat import LLMClient, LLMUnavailable, TitleEmbeddings
 from chat.embeddings import QUERY_INSTRUCTION, title_text
-from test_chat import make_tools, titles
+from test_chat import make_tools, models, titles
 from test_tmdb_content import response
 
 # a stand-in embedding model: one dimension per idea, so "caper" means the same as "heist" without sharing a word
@@ -84,28 +84,27 @@ class TestSearchByMeaning(unittest.TestCase):
         self.assertEqual(titles(self.tools.call("search_library", {"query": "bank heist crew"}, "u1"))[0], "Heist Two (2000)")
 
 
-class TestOllamaEmbed(unittest.TestCase):
+class TestLLMEmbed(unittest.TestCase):
 
-    def test_batches_and_normalises(self):
-        llm = OllamaClient(hosts="http://up:1", model="m")
-        llm.host = "http://up:1"
+    def test_batches_keeps_order_and_normalises(self):
+        llm = LLMClient(url="http://server:8080", embed_model="Embed-0.6B")
         bodies = []
 
         def post(url, json, timeout):
             bodies.append(json)
-            return response(200, {"embeddings": [[3.0, 4.0]] * len(json["input"])})
-        with mock.patch("chat.llm.EMBED_BATCH", 2), mock.patch("chat.llm.requests.post", side_effect=post):
+            n = len(json["input"])
+            return response(200, {"data": [{"index": i, "embedding": [3.0 * (i + 1), 4.0 * (i + 1)]} for i in reversed(range(n))]})
+        with mock.patch("chat.llm.EMBED_BATCH", 2), mock.patch("chat.llm.requests.post", side_effect=post), \
+             mock.patch("chat.llm.requests.get", return_value=response(200, models())):
             e = llm.embed(["a", "b", "c"])
         self.assertEqual([b["input"] for b in bodies], [["a", "b"], ["c"]])
-        self.assertEqual(bodies[0]["model"], llm.embed_model)
-        self.assertEqual(bodies[0]["options"]["num_gpu"], 0)                    # the GPU stays the chat model's
+        self.assertEqual(bodies[0]["model"], "Embed-0.6B")
         np.testing.assert_allclose(e, [[0.6, 0.8]] * 3, rtol=1e-6)
 
-    def test_model_not_pulled_is_unavailable(self):
-        llm = OllamaClient(hosts="http://up:1", model="m")
-        with mock.patch("chat.llm.requests.get", return_value=response(200, {})), \
-             mock.patch("chat.llm.requests.post", return_value=response(404, {"error": "not found"})):
-            with self.assertRaisesRegex(LLMUnavailable, "isn't pulled"):
+    def test_embedding_model_not_on_the_server_is_unavailable(self):
+        llm = LLMClient(url="http://server:8080", embed_model="Other")
+        with mock.patch("chat.llm.requests.get", return_value=response(200, models())):
+            with self.assertRaisesRegex(LLMUnavailable, "doesn't have Other"):
                 llm.embed(["a"])
 
 

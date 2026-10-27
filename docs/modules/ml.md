@@ -208,6 +208,13 @@ Metrics, where higher is better:
 
 **Tried and not adopted** (Oct 2026): scoring a candidate other than by its similarity to the summed profile. The variants were its closest profile title, its 10 closest, power means that lean towards the closest, and profiles that weight recent watches more. None did better in either evaluation. The summed profile had the best leave-one-out hit@10, and with the freshness boost every variant reached hit@10 ~0.375.
 
+Also tried and not adopted (Oct 2026): text embeddings of each title (Qwen3-Embedding 0.6b, 4b and 8b; plot only, or
+name, genres, keywords and plot), blended into the similarity at 20-40%, or replacing the description block. Alone
+they were weak (hit@10 0.02-0.06). Blended, none beat the default in leave-one-out, and in the time-aware
+evaluation most were measurably worse. What people here watch next follows who made a title, what similar audiences
+liked and what just arrived, not what its plot is about. Embeddings are used for the chat-bot's search instead
+([Chat: search by meaning](chat.md#search-by-meaning)).
+
 Results, Oct 2026 (566 candidates, 178 held out, profiles including Emby played flags):
 
 | Model | hit@10 | MRR | AUC |

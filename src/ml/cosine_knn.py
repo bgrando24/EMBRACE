@@ -116,17 +116,19 @@ class CosineKNN:
         L2-normalised so `recommend_for_profile()` scores titles by cosine similarity to it.
 
         Each title contributes the same total amount however many genres it has, so a 3-genre title doesn't count
-        more than a 1-genre one. Titles not in the model are skipped.
+        more than a 1-genre one. Titles not in the model are skipped. A negative weight subtracts the title (e.g. one
+        the user gave up on, see `UserProfiles`), so titles like it rank lower.
 
         Raises:
             ValueError: if no title with a positive weight is in the model
         """
         weights = pd.Series(list(weights), index=list(t_consts), dtype=float)
-        weights = weights[weights.index.isin(self._row_of.index) & (weights > 0)]
-        if weights.empty:
+        weights = weights[weights.index.isin(self._row_of.index) & (weights != 0)]
+        if not (weights > 0).any():
             raise ValueError("None of the weighted titles are in the model")
         vector = np.asarray(weights.to_numpy(dtype=np.float32) @ self._X[self._row_of[weights.index].to_numpy()]).ravel()
-        return vector / np.linalg.norm(vector)
+        norm = np.linalg.norm(vector)
+        return vector / norm if norm > 0 else vector
 
     def similarity_to_profile(self, profile: np.ndarray) -> pd.Series:
         """Cosine similarity of every title in the model to a taste profile (see `profile_vector()`), by t_const"""

@@ -39,7 +39,7 @@ from .requests_signal import Requests
 from .genre_knn import GenreKNN
 from .style_tags import StyleTags
 from .preprocess import PreProcess
-from .user_profiles import MIN_INTEREST, title_interest
+from .user_profiles import ABANDONED_MIN_INTEREST, MIN_INTEREST, abandoned, title_interest
 
 # only hold out titles the user clearly liked: 80%+ of a movie (credits are often skipped), or ~1.5+ hours of a series
 MIN_HELDOUT_INTEREST = 0.8
@@ -96,6 +96,8 @@ def leave_one_out(
     in_scope: set[str],
     candidates: set[str],
     min_heldout_interest: float = MIN_HELDOUT_INTEREST,
+    negative_weight: Optional[float] = None,
+    abandoned_min_interest: float = ABANDONED_MIN_INTEREST,
 ) -> pd.DataFrame:
     """
     Args:
@@ -103,14 +105,21 @@ def leave_one_out(
         user_titles (DataFrame): output of `PreProcess.get_user_title_stats()[0]`
         in_scope (set[str]): titles that may be part of a profile - use the same set for every model compared
         candidates (set[str]): titles that may be ranked (and so held out)
+        negative_weight (float, optional): as for `UserProfiles`: abandoned titles (`abandoned()`) leave the profile
+            and count against it with this weight - DEFAULT: None, treated like any other title
+        abandoned_min_interest (float, optional): passed to `abandoned()`
 
     Returns:
         DataFrame: one row per held-out (user, title): user_name, imdb_id, unit_name, interest, rank (1 = top), n_ranked
     """
-    h = user_titles.assign(interest=title_interest(user_titles))
+    h = user_titles.assign(
+        interest=title_interest(user_titles),
+        abandoned=abandoned(user_titles, min_interest=abandoned_min_interest) if negative_weight is not None else False,
+    )
     rows = []
     for (user_id, user_name), u in h.groupby(["user_id", "user_name"], dropna=False):
-        profile = u[u["imdb_id"].isin(in_scope) & (u["interest"] >= MIN_INTEREST)]
+        profile = u[u["imdb_id"].isin(in_scope) & (u["interest"] >= MIN_INTEREST) & ~u["abandoned"]]
+        negatives = u.loc[u["imdb_id"].isin(in_scope) & u["abandoned"], "imdb_id"].tolist()
         watched = set(u.loc[_seen(u), "imdb_id"])
         # only watch-history titles are held out, so extra profile sources (e.g. Emby played flags) can be compared
         # on the same held-out set
@@ -120,7 +129,8 @@ def leave_one_out(
             if rest.empty:
                 continue
             exclude = watched - {held["imdb_id"]}
-            ranking = ranker(rest["imdb_id"].tolist(), rest["interest"].tolist(), exclude, sorted(candidates), None, user_id)
+            t_consts, weights = _with_negatives(rest, negatives, negative_weight)
+            ranking = ranker(t_consts, weights, exclude, sorted(candidates), None, user_id)
             rows.append({
                 "user_name": user_name, "imdb_id": held["imdb_id"], "unit_name": held["unit_name"],
                 "interest": held["interest"], "rank": ranking.index(held["imdb_id"]) + 1, "n_ranked": len(ranking),
@@ -134,6 +144,8 @@ def next_watch(
     in_scope: set[str],
     freshness: Freshness,
     min_heldout_interest: float = MIN_HELDOUT_INTEREST,
+    negative_weight: Optional[float] = None,
+    abandoned_min_interest: float = ABANDONED_MIN_INTEREST,
 ) -> pd.DataFrame:
     """
     Time-aware leave-one-out: for each title a user clearly liked, at the time T they first watched it, the profile
@@ -142,7 +154,8 @@ def next_watch(
 
     Held-out titles that weren't on the server at T by Emby's dates (e.g. re-imported on the rebuild) are skipped,
     as are users' first titles (no earlier history). Profile weights use the user's total interest in each earlier
-    title, including any watching after T - a small leak, as only totals are kept per title.
+    title, including any watching after T - a small leak, as only totals are kept per title. With `negative_weight`
+    (see `leave_one_out()`), titles count as abandoned by how things stood at T.
 
     Returns:
         DataFrame: as `leave_one_out()`, plus `watched_at` (T)
@@ -165,18 +178,33 @@ def next_watch(
             if pd.isna(when):
                 continue
             earlier = pool[(pool["known_at"] < when) & (pool["imdb_id"] != held["imdb_id"])]
+            negatives = []
+            if negative_weight is not None:
+                gave_up = abandoned(u, now=when, min_interest=abandoned_min_interest) & u["imdb_id"].isin(in_scope)
+                earlier = earlier[~earlier.index.isin(u.index[gave_up])]
+                negatives = u.loc[gave_up, "imdb_id"].tolist()
             available = set(freshness.at(when).index) & in_scope
             if earlier.empty or held["imdb_id"] not in available:
                 continue
             exclude = set(u.loc[_seen(u) & (u["first_watched"] < when), "imdb_id"])
             candidates = sorted(available - exclude)
-            ranking = ranker(earlier["imdb_id"].tolist(), earlier["interest"].tolist(), exclude, candidates, when, user_id)
+            t_consts, weights = _with_negatives(earlier, negatives, negative_weight)
+            ranking = ranker(t_consts, weights, exclude, candidates, when, user_id)
             rows.append({
                 "user_name": user_name, "imdb_id": held["imdb_id"], "unit_name": held["unit_name"],
                 "interest": held["interest"], "watched_at": when,
                 "rank": ranking.index(held["imdb_id"]) + 1, "n_ranked": len(ranking),
             })
     return pd.DataFrame(rows)
+
+
+def _with_negatives(profile: pd.DataFrame, negatives: list[str],
+                    negative_weight: Optional[float]) -> tuple[list[str], list[float]]:
+    """A ranker's profile titles and weights: by interest, then the abandoned titles at -negative_weight"""
+    t_consts, weights = profile["imdb_id"].tolist(), profile["interest"].tolist()
+    if negative_weight:
+        t_consts, weights = t_consts + negatives, weights + [-negative_weight] * len(negatives)
+    return t_consts, weights
 
 
 def _seen(user_rows: pd.DataFrame) -> pd.Series:

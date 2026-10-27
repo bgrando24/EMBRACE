@@ -4,6 +4,8 @@ import numpy as np
 import pandas as pd
 
 from ml import GenreKNN, PreProcess, UserProfiles, title_interest
+from ml.evaluate import leave_one_out
+from ml.user_profiles import abandoned
 from test_genre_knn import rows
 
 TITLES = rows(
@@ -121,6 +123,59 @@ class TestUserProfiles(unittest.TestCase):
         with self.assertRaises(KeyError):
             self.profiles.recommend("nobody")
 
+
+
+def last_watched(row, when, items=1):
+    return {**row, "last_watched_timestamp": when, "first_watched_timestamp": when, "items_watched": items}
+
+
+class TestAbandoned(unittest.TestCase):
+
+    def test_given_up_on_and_left_for_a_while(self):
+        rows = pd.DataFrame([
+            last_watched(user_title("m1", "Stopped", "Movie", 0.6, 2), "2026-01-01"),              # 30%, weeks ago
+            last_watched(user_title("m2", "In progress", "Movie", 0.6, 2), "2026-02-25"),          # 30%, 4 days ago
+            last_watched(user_title("m3", "Finished", "Movie", 1.9, 2), "2026-01-01"),
+            last_watched(user_title("s1", "Pilot only", "Series", 0.8), "2026-01-01"),
+            last_watched(user_title("s2", "Five episodes", "Series", 4), "2026-01-01", items=5),
+            last_watched(user_title("m4", "Opened", "Movie", 0.02, 2), "2026-01-01"),               # 1%: a stray click?
+        ])
+        self.assertEqual(rows.loc[abandoned(rows, now="2026-03-01"), "imdb_id"].tolist(), ["m1", "s1", "m4"])
+        self.assertEqual(rows.loc[abandoned(rows, now="2026-03-01", min_interest=0.05), "imdb_id"].tolist(), ["m1", "s1"])
+        played = rows.assign(source="emby_played")
+        self.assertFalse(abandoned(played, now="2026-03-01").any())     # only watch history says what was given up
+
+    def test_negatives_push_similar_titles_down_and_are_off_by_default(self):
+        knn = GenreKNN(PreProcess.encode_title_genres(TITLES))
+        history = pd.DataFrame([
+            last_watched(user_title("tt3", "Crime Drama Popular", "Movie", 2, 2), "2026-01-01"),
+            last_watched(user_title("tt2", "Romcom", "Movie", 1.5, 1.5), "2026-01-01"),
+            last_watched(user_title("tt8", "Crime Comedy", "Movie", 0.3, 2), "2020-01-01"),     # gave up on
+        ])
+        plain, negative = UserProfiles(knn, history), UserProfiles(knn, history, negative_weight=1.0)
+        self.assertIn("tt8", plain.profile_titles("u1")["imdb_id"].tolist())        # 15% watched: counts, as before
+        self.assertEqual(set(negative.profile_titles("u1")["imdb_id"]), {"tt2", "tt3"})
+        self.assertEqual(negative.abandoned_titles("u1")["imdb_id"].tolist(), ["tt8"])
+        self.assertLess(negative.taste_similarity("u1")["tt5"], plain.taste_similarity("u1")["tt5"])   # comedy
+        self.assertNotIn("tt8", negative.recommend("u1", n=10)["t_const"].tolist())   # still never recommended
+
+    def test_evaluation_passes_them_to_the_ranker_as_negative_weights(self):
+        history = pd.DataFrame([
+            last_watched(user_title("tt3", "Crime Drama Popular", "Movie", 2, 2), "2026-01-01"),
+            last_watched(user_title("tt4", "Crime Drama Niche", "Movie", 2, 2), "2026-01-01"),
+            last_watched(user_title("tt8", "Crime Comedy", "Movie", 0.3, 2), "2020-01-01"),
+        ])
+        sent = []
+
+        def ranker(t_consts, weights, exclude, candidates, when, user_id):
+            sent.append(dict(zip(t_consts, weights)))
+            return sorted(candidates)
+        scope = {"tt3", "tt4", "tt8"}
+        leave_one_out(ranker, history, scope, scope)
+        self.assertIn("tt8", sent[0])           # off: it's a profile title (15% watched, interest >= MIN_INTEREST)
+        sent.clear()
+        leave_one_out(ranker, history, scope, scope, negative_weight=0.5)
+        self.assertEqual([w["tt8"] for w in sent], [-0.5, -0.5])
 
 if __name__ == "__main__":
     unittest.main()

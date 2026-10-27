@@ -98,6 +98,7 @@ class TestOllamaEmbed(unittest.TestCase):
             e = llm.embed(["a", "b", "c"])
         self.assertEqual([b["input"] for b in bodies], [["a", "b"], ["c"]])
         self.assertEqual(bodies[0]["model"], llm.embed_model)
+        self.assertEqual(bodies[0]["options"]["num_gpu"], 0)                    # the GPU stays the chat model's
         np.testing.assert_allclose(e, [[0.6, 0.8]] * 3, rtol=1e-6)
 
     def test_model_not_pulled_is_unavailable(self):

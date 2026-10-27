@@ -112,12 +112,16 @@ Creek and not a horror film called *Us*. So search also compares meanings, with 
 Made by the LLM host, not the nightly refresh: the bot needs that host to answer anyway, and the refresh then never
 depends on it being on.
 - **First run:** after loading its data, and after each answer, the bot embeds whatever isn't yet, in the
-  background. All ~12k titles take about 4 minutes on an RTX 3070 Ti; after that, only new or changed titles.
+  background. All ~12k titles take about 40 minutes on bg-server's CPU; after that, only new or changed titles
+  (seconds).
 - **Until then,** or if the host stops mid-conversation, search matches words only. `status` says which.
 
-Why this model:
-- **Size:** the 0.6b version shares an 8 GB GPU with `qwen3:8b` (0.6 + 5.2 GB) and embeds a query in ~13 ms. The 4b
-  and 8b versions would push the chat model out of GPU memory on every message.
+Why this model, on the CPU:
+- **The GPU stays the chat model's.** Embeddings run on the CPU (`EMBED_NUM_GPU = 0`). On bg-server's 8 GB GPU,
+  with the desktop using ~1.3 GB, the embedding model and `qwen3:8b` didn't fit together. Ollama then put 16% of
+  the chat model on the CPU, and answers took 20-25 s instead of ~3 s.
+- **Size:** the 0.6b version embeds a query in ~60 ms on the CPU (i7-10700K). The 4b and 8b versions gave no
+  better picks in testing and would be much slower there.
 - **Quality:** on ten typical queries, it already beat word search on every vague one, e.g. "epic fantasy with
   dragons and politics" went from Lord of the Rings films to House of the Dragon and Game of Thrones.
 

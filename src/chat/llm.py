@@ -13,9 +13,12 @@ DEFAULT_HOSTS = f"http://localhost:{DEFAULT_PORT}"
 DEFAULT_NUM_CTX = 8192
 # how long the model stays in (GPU) memory after the last message
 DEFAULT_KEEP_ALIVE = "15m"
-# text embeddings for search by meaning (see docs/modules/chat.md): small enough to share an 8 GB GPU with the chat
-# model, and 13 ms per query; the 4b/8b versions would push the chat model out of GPU memory on every message
+# text embeddings for search by meaning (see docs/modules/chat.md): small, so fast enough on the CPU
 DEFAULT_EMBED_MODEL = "qwen3-embedding:0.6b"
+# embeddings run on the CPU (Ollama's num_gpu = layers on the GPU), leaving the GPU to the chat model: on an 8 GB GPU
+# with a desktop using ~1.3 GB, the two didn't fit together, and Ollama put 16% of qwen3:8b on the CPU, making answers
+# ~7x slower (Oct 2026). On the CPU (i7-10700K) a query takes ~60 ms
+EMBED_NUM_GPU = 0
 # texts per embedding request
 EMBED_BATCH = 64
 
@@ -124,7 +127,8 @@ class OllamaClient:
         """
         out = []
         for i in range(0, len(texts), EMBED_BATCH):
-            body = {"model": self.embed_model, "input": texts[i:i + EMBED_BATCH], "keep_alive": self.keep_alive}
+            body = {"model": self.embed_model, "input": texts[i:i + EMBED_BATCH], "keep_alive": self.keep_alive,
+                    "options": {"num_gpu": EMBED_NUM_GPU}}
             out.extend(self._post("/api/embed", body, self.embed_model)["embeddings"])
         e = np.asarray(out, dtype=np.float32).reshape(len(out), -1)
         return e / np.maximum(np.linalg.norm(e, axis=1, keepdims=True), 1e-12)

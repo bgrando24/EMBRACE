@@ -3,11 +3,11 @@
 EMBRACE's conversational interface: ask for something to watch in plain language ("a funny show like Letterkenny",
 "a tense thriller under 2 hours", "what should I watch tonight?") and get a few picks chosen with **your** watch
 history in mind: from the server, and beyond it (about 12,000 well-known titles it doesn't have, to request in
-Jellyseerr). It runs as a Discord bot, with a local LLM (via [Ollama](https://ollama.com)) that is only running when
-you start it.
+Jellyseerr). It runs as a Discord bot, with a local LLM: a [llama.cpp](https://github.com/ggml-org/llama.cpp) server
+on another machine, which is also used for other things, so it may be off or busy at times.
 
 ```
-Discord ──► discord_bot.py (EMBRACE host, always on) ──► OllamaClient ──► Ollama (a GPU machine / Mac, on demand)
+Discord ──► discord_bot.py (EMBRACE host, always on) ──► LLMClient ──► llama-server (a GPU machine, when it's on)
                      │                                        ▲
                      └──► ChatSession ──► LibraryTools ───────┘ tool calls: search, similar titles, details,
                                               │                            your picks, your history
@@ -59,55 +59,43 @@ afresh after 2 hours idle or when you send `reset`. It also remembers the titles
 its answers), and search, similar titles and recommendations leave them out: told "those aren't funny enough", a
 small model otherwise searches with nearly the same words and offers the same titles, whatever its prompt says. A question may take up to 5 rounds of tool calls.
 
-## The LLM: `scripts/llm/llm.sh`
+## The LLM: a shared llama.cpp server
 
-The LLM runs on whichever machine you start it on, so it only uses a GPU (or a laptop's memory) while you want it:
+EMBRACE doesn't run an LLM of its own: it uses a [llama.cpp](https://github.com/ggml-org/llama.cpp) server
+(`llama-server`) that's already running on a GPU machine for other things, through its OpenAI-compatible API
+(`chat.LLMClient`, at `EMBRACE_LLM_URL`). One server means one model in GPU memory, instead of two competing for it.
 
-```bash
-scripts/llm/llm.sh start              # on this machine
-scripts/llm/llm.sh start <ssh host>   # on another machine, over ssh (no repo needed there)
-scripts/llm/llm.sh status [HOST]
-scripts/llm/llm.sh stop [HOST]
-```
+The server runs in router mode: it lists several models, loads one on the first request (and unloads it after a
+while idle), and holds at most `--models-max` at once. So EMBRACE:
+- **uses whichever chat model is loaded already**, and only asks for its own (`EMBRACE_LLM_MODEL`) when none is, so
+  it never swaps out the model someone else is using;
+- **needs room for the embedding model beside it**: `--models-max 2`, with the embedding model's preset set to run
+  on the CPU (see [Search by meaning](#search-by-meaning));
+- **switches thinking off** per request (`chat_template_kwargs`), as answers are much slower with it.
 
-`start` runs a separate Ollama server for EMBRACE on port **11435**, listening on the local network, pulls the
-model on first use, and loads it. Being separate, it leaves alone any Ollama you already run (the Mac app, or a
-system service on 11434), and it runs as you, so no sudo is needed (with a snap install, it runs the snap's binary
-directly, since the snap's launcher forces its own address). Models are stored in `~/.ollama/models`, shared with
-your own Ollama on the same machine. While running, the model leaves memory after 15 minutes without a message, and
-loads again (a few seconds) on the next one.
+The server must listen on the network (`--host 0.0.0.0`). Its API has no authentication: if the machine has a
+firewall, allow only the EMBRACE host to reach the port.
 
-The bot tries each URL in `EMBRACE_LLM_HOSTS` in order and uses the first that answers, so list every machine you
-might start it on. When none is running, it replies with how to start one.
+### When it's off or busy
 
-> **Network access.** Ollama's API has no authentication: anyone on your network can use a running EMBRACE LLM. If
-> the machine has a firewall, allow only the EMBRACE host, e.g. `sudo ufw allow from <EMBRACE host IP> to any port
-> 11435 proto tcp`. After `stop`, nothing listens on the port.
+The machine and its server are used for other things, so EMBRACE treats the LLM as optional:
+- **Everything that isn't chat carries on**: the nightly refresh, daily picks and playlists never use it.
+- **Chat says so and waits.** Any failure to get an answer (the machine off, the server stopped, no reply within
+  3 minutes because it's busy with something else, a model failing to load) is one error, `LLMUnavailable`. The bot
+  then replies that its AI side isn't available right now, keeps the conversation, and tries again on the next
+  message. `status` says whether it's available.
+- **Search by meaning catches up by itself**: titles not embedded yet wait for the server, retried every 15 minutes,
+  and search matches words only until then.
+- **Batch jobs stop and resume**: `scripts/llm/tag_titles.py` keeps what it has tagged, and carries on from there
+  the next time it's run.
 
-### Model
-
-Default `qwen3:8b`: it calls tools reliably and fits an 8 GB GPU with an 8k-token context (about 5.2 GB of weights).
-Set `EMBRACE_LLM_MODEL` to try others: the model must support tools in Ollama (see the "tools" tag on
-ollama.com/library), and the same name must be set for `llm.sh` (which pulls it) and for the bot. `llm.sh` also pulls the embedding model
-(`EMBRACE_EMBED_MODEL`, see [Search by meaning](#search-by-meaning)). Thinking mode is
-off: on test questions it made answers about 4x slower (about 37 s vs 8 s on an M4 Pro) without choosing better
-titles or tools.
-
-Speed, measured Oct 2026: about 8 s per answer on an M4 Pro, and 3-6 s on an RTX 3070 Ti (8 GB). The first answer
-after the model was unloaded adds its loading time (up to ~30 s).
-- **What sets the 3070 Ti's speed:** the model and an 8k-token context need ~6.0 GB. Whatever else uses the GPU
-  (the desktop, Steam...) decides whether that all fits. When it doesn't, Ollama puts part of the model on the CPU
-  (`ollama ps` shows e.g. `9%/91% CPU/GPU`), and answers slow down.
-- **8-bit context cache:** `llm.sh` stores the context's cache at 8 bits (`OLLAMA_KV_CACHE_TYPE=q8_0`, with flash
-  attention), half the memory of 16 bits. With ~1.3 GB used by other apps, that took answers from 7.5-10 s to 4.5-6 s.
-- **Why the context stays at 8k:** a 7-turn conversation reached ~6,800 prompt tokens, since the last 6 exchanges are
-  kept with their tool results.
+The server answers one request at a time (`--parallel 1`), so a question can wait behind someone else's request.
 
 ### Search by meaning
 
 Word matching can't tell that "mind-bending sci-fi" means Interstellar, or that "cozy feel-good show" means Schitt's
 Creek and not a horror film called *Us*. So search also compares meanings, with text embeddings
-(`EMBRACE_EMBED_MODEL`, default `qwen3-embedding:0.6b`) from the same Ollama host as the chat model:
+(`EMBRACE_EMBED_MODEL`, default `Qwen3-Embedding-0.6B-Q8_0`) from the same server as the chat model:
 - **What's embedded:** each title's text (`chat.embeddings.title_text()`): name, year, movie or series, genres,
   keywords, director or creator, the top 4 cast, and the plot.
 - **Where it's kept:** `data/cache/title_embeddings_<model>.parquet` (`TitleEmbeddings`), stored with a hash of
@@ -116,19 +104,31 @@ Creek and not a horror film called *Us*. So search also compares meanings, with 
 - **Ranking:** a query's match is 75% meaning and 25% words (`SEMANTIC_WEIGHT`). Words still catch names and exact
   phrases. Genre words and `like` then count as before.
 
-Made by the LLM host, not the nightly refresh: the bot needs that host to answer anyway, and the refresh then never
-depends on it being on.
-- **First run:** after loading its data, and after each answer, the bot embeds whatever isn't yet, in the
-  background. All ~12k titles take about 40 minutes on bg-server's CPU; after that, only new or changed titles
-  (seconds).
-- **Until then,** or if the host stops mid-conversation, search matches words only. `status` says which.
+Made by the LLM server, not the nightly refresh, so the refresh never depends on it being on.
+- **First run:** after loading its data, the bot embeds whatever isn't yet, in the background, and again after each
+  answer and every 15 minutes until it's all done. All ~12k titles take a while on the CPU; after that, only new or
+  changed titles (seconds).
+- **Until then,** or if the server stops mid-conversation, search matches words only. `status` says which.
 
 Why this model, on the CPU:
-- **The GPU stays the chat model's.** Embeddings run on the CPU (`EMBED_NUM_GPU = 0`). On bg-server's 8 GB GPU,
-  with the desktop using ~1.3 GB, the embedding model and `qwen3:8b` didn't fit together. Ollama then put 16% of
-  the chat model on the CPU, and answers took 20-25 s instead of ~3 s.
-- **Size:** the 0.6b version embeds a query in ~60 ms on the CPU (i7-10700K). The 4b and 8b versions gave no
-  better picks in testing and would be much slower there.
+- **The GPU stays the chat model's.** On an 8 GB GPU shared with a desktop, the embedding model and a chat model
+  didn't fit together, and part of the chat model went to the CPU, making answers several times slower. The
+  embedding model's preset in the server's `--models-preset` file keeps it off the GPU:
+
+    ```ini
+    [Qwen3-Embedding-0.6B-Q8_0]
+    embeddings = true
+    pooling = last
+    n-gpu-layers = 0
+    c = 8192
+    batch-size = 2048
+    ubatch-size = 2048
+    parallel = 4
+    threads = 4
+    ```
+
+- **Size:** the 0.6B version embeds a query in well under a second on the CPU. The 4B and 8B versions gave no better
+  picks in testing and would be much slower there.
 - **Quality:** on ten typical queries, it already beat word search on every vague one, e.g. "epic fantasy with
   dragons and politics" went from Lord of the Rings films to House of the Dragon and Game of Thrones.
 
@@ -138,8 +138,9 @@ beat it ([ML: tried and not adopted](ml.md#evaluation-mlevaluate)).
 ## The Discord bot: `scripts/chat/discord_bot.py`
 
 Talk to it in a DM, or @mention it in a channel it can read. Besides questions, it understands `help`, `reset`
-and `status` (whether the LLM is running, and how old its library data is). It reloads the library data on the
-first message after the nightly refresh. Questions are answered one at a time (one GPU).
+and `status` (whether its AI side is available, and how old its library data is). It reloads the library data on
+the first message after the nightly refresh. Questions are answered one at a time, as the LLM server answers one
+request at a time.
 
 Each Discord user must be linked to their Emby user name in `EMBRACE_DISCORD_USERS`; anyone else is told their
 Discord ID and asked to get linked, and nothing about the library or anyone's history is shown to them.
@@ -153,8 +154,8 @@ Discord ID and asked to get linked, and nothing about the library or anyone's hi
    History*; open the URL. (To only DM it, it still needs to share a server with you.)
 3. **Link users**: DM the bot; it replies with your Discord ID. Add `EMBRACE_DISCORD_USERS=<discord id>:<emby
    name>,...` to `.env`.
-4. **Point it at the LLM**: `EMBRACE_LLM_HOSTS=http://<gpu machine>:11435,http://<mac>:11435` (machine addresses
-   on your network).
+4. **Point it at the LLM**: `EMBRACE_LLM_URL=http://<gpu machine>:8080` (see
+   [The LLM](#the-llm-a-shared-llamacpp-server)), and `EMBRACE_LLM_MODEL` to the chat model to load when none is.
 5. **Run it as a service** on the EMBRACE host:
 
     ```bash
@@ -175,9 +176,8 @@ PYTHONPATH=src python scripts/chat/chat_cli.py --user <emby name> --tools
 PYTHONPATH=src python scripts/chat/chat_cli.py --user <emby name> --ask "a heist movie" --ask "something lighter"
 ```
 
-`--tools` prints each tool call. Set `EMBRACE_LLM_HOSTS` to the machine running the LLM (default
-`http://localhost:11435`). It embeds any titles that aren't yet before the first question, so the first run
-takes a few minutes longer.
+`--tools` prints each tool call. It uses the same `EMBRACE_LLM_URL` as the bot, and embeds any titles that aren't
+yet before the first question, so the first run takes longer.
 
 ## Limits and next steps
 

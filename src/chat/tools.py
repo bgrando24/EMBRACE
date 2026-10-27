@@ -222,7 +222,7 @@ class LibraryTools:
     # ---- for the LLM ----
 
     def schemas(self) -> list[dict]:
-        """Tool definitions in Ollama's (OpenAI-style) format"""
+        """Tool definitions in the OpenAI API's format"""
         return [
             {"type": "function", "function": {
                 "name": name, "description": spec["description"],
@@ -421,7 +421,7 @@ class LibraryTools:
                          " ".join(p["name"] for p in self._people(people, cast=5)), str(overview or "")])
 
     def use_embeddings(self, store: TitleEmbeddings, embed: Callable[[list[str]], np.ndarray]) -> None:
-        """Search by meaning from now on: `store`'s title embeddings, and `embed` for queries (e.g. OllamaClient.embed)"""
+        """Search by meaning from now on: `store`'s title embeddings, and `embed` for queries (e.g. LLMClient.embed)"""
         E = store.matrix(self.titles.index)
         self._embed, self._E = embed, E
 

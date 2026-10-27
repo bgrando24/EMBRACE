@@ -1,6 +1,6 @@
 """
 Chat with EMBRACE in the terminal, as an Emby user (the same model and tools as the Discord bot).
-The LLM must be running: scripts/llm/llm.sh start.
+Needs the LLM server (EMBRACE_LLM_URL); without it, says so and stops.
 
 usage (from project root): PYTHONPATH=src python scripts/chat/chat_cli.py --user NAME [--ask "question" ...] [--tools]
 """
@@ -11,7 +11,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from chat import ChatSession, LibraryTools, LLMUnavailable, OllamaClient, TitleEmbeddings, tmdb_lookup
+from chat import ChatSession, LibraryTools, LLMClient, LLMUnavailable, TitleEmbeddings, tmdb_lookup
 from connectors import TMDBConnector
 from ml import PreProcess, Recommender
 
@@ -34,11 +34,11 @@ def main():
     user_id = match["user_id"].iloc[0] if len(match) else None
     if user_id is None:
         print(f"[WARN] no watch history for {args.user}: personal tools will say so")
-    llm = OllamaClient()
+    llm = LLMClient()
     token = os.getenv("TMDB_READ_ACCESS_TOKEN")
     tools = LibraryTools(rec, runtimes=pp.get_title_runtimes(), lookup=tmdb_lookup(TMDBConnector(token)) if token else None)
     embeddings = TitleEmbeddings(llm.embed_model)
-    try:        # search by meaning: embeds what isn't yet (all ~12k titles the first time: ~4 min)
+    try:        # search by meaning: embeds what isn't yet (all ~12k titles the first time)
         embeddings.update(TitleEmbeddings.texts(tools.titles), llm.embed, log=lambda m: print(m))
         tools.use_embeddings(embeddings, llm.embed)
     except LLMUnavailable as e:
@@ -46,7 +46,10 @@ def main():
     session = ChatSession(llm, tools, user_id, args.user, log=print if args.tools else lambda _: None)
 
     questions = iter(args.ask) if args.ask else None
-    print(f"[INFO] {llm.model} via {llm.find_host() or 'no host yet'} - 'reset' starts over, Ctrl-D quits")
+    try:
+        print(f"[INFO] {llm.chat_model()} at {llm.url} - 'reset' starts over, Ctrl-D quits")
+    except LLMUnavailable as e:
+        print(f"[INFO] {e} - questions will fail until it's back")
     while True:
         try:
             text = next(questions) if questions else input("\nyou> ")

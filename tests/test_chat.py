@@ -5,7 +5,7 @@ from unittest import mock
 import pandas as pd
 import requests
 
-from chat import ChatSession, LibraryTools, LLMUnavailable, OllamaClient, tmdb_lookup
+from chat import ChatSession, LibraryTools, LLMClient, LLMUnavailable, tmdb_lookup
 from chat.session import MAX_TOOL_ROUNDS
 from connectors import TMDBConnector
 from ml import ContentKNN, Freshness, PreProcess, Recommender, Requests, UserProfiles
@@ -225,7 +225,7 @@ class FakeLLM:
 
 
 def tool_call(name, **args):
-    return {"role": "assistant", "content": "", "tool_calls": [{"function": {"name": name, "arguments": args}}]}
+    return {"role": "assistant", "content": "", "tool_calls": [{"id": "c1", "function": {"name": name, "arguments": args}}]}
 
 
 class TestChatSession(unittest.TestCase):
@@ -237,6 +237,7 @@ class TestChatSession(unittest.TestCase):
         self.assertEqual(session.ask("a heist movie?"), "Try **Heist Two**")
         sent = llm.sent[1][0]
         self.assertEqual(sent[-1]["role"], "tool")
+        self.assertEqual(sent[-1]["tool_call_id"], "c1")
         self.assertIn("Heist Two", sent[-1]["content"])
         self.assertIn("Sam", sent[0]["content"])
         session.ask("what's it about?")
@@ -267,32 +268,66 @@ class TestChatSession(unittest.TestCase):
         self.assertEqual(session.exchanges, [])
 
 
-class TestOllamaClient(unittest.TestCase):
+MODELS = {"data": [{"id": "Embed-0.6B", "status": {"value": "loaded"}}, {"id": "Big-Q3", "status": {"value": "unloaded"}},
+                   {"id": "Big-Q4", "status": {"value": "unloaded"}}]}
 
-    def test_first_host_that_answers_is_used_and_remembered(self):
-        def get(url, timeout):
-            if url.startswith("http://down"):
-                raise requests.ConnectionError()
-            return response(200, {"version": "1"})
-        llm = OllamaClient(hosts="http://down:1, http://up:2/", model="m")
-        with mock.patch("chat.llm.requests.get", side_effect=get) as g, \
-             mock.patch("chat.llm.requests.post", return_value=response(200, {"message": {"content": "hi"}})) as p:
-            self.assertEqual(llm.chat([{"role": "user", "content": "hi"}])["content"], "hi")
-            llm.chat([])
-        self.assertEqual(llm.host, "http://up:2")
-        self.assertEqual(g.call_count, 2)       # found once, then remembered
-        self.assertEqual(p.call_args.args[0], "http://up:2/api/chat")
-        self.assertEqual(p.call_args.kwargs["json"]["options"]["num_ctx"], llm.num_ctx)
 
-    def test_no_host_or_no_model_is_unavailable(self):
-        llm = OllamaClient(hosts="http://down:1", model="m")
-        with mock.patch("chat.llm.requests.get", side_effect=requests.ConnectionError()):
-            with self.assertRaises(LLMUnavailable):
+def models(*loaded):
+    return {"data": [{**m, "status": {"value": "loaded" if m["id"] in loaded else "unloaded"}} for m in MODELS["data"]]}
+
+
+class TestLLMClient(unittest.TestCase):
+
+    def client(self, **kw):
+        return LLMClient(url="http://server:8080/", embed_model="Embed-0.6B", **kw)
+
+    def test_uses_the_loaded_chat_model_else_its_own(self):
+        reply = response(200, {"choices": [{"message": {"content": "hi"}}]})
+        for loaded, expected in ((("Big-Q3", "Embed-0.6B"), "Big-Q3"), (("Embed-0.6B",), "Big-Q4"), ((), "Big-Q4")):
+            llm = self.client(model="Big-Q4")
+            with mock.patch("chat.llm.requests.get", return_value=response(200, models(*loaded))), \
+                 mock.patch("chat.llm.requests.post", return_value=reply) as post:
+                self.assertEqual(llm.chat([{"role": "user", "content": "hi"}])["content"], "hi")
+            self.assertEqual(post.call_args.args[0], "http://server:8080/v1/chat/completions")
+            self.assertEqual(post.call_args.kwargs["json"]["model"], expected)     # never swaps out someone's model
+        self.assertFalse(post.call_args.kwargs["json"]["chat_template_kwargs"]["enable_thinking"])
+
+    def test_tool_calls_go_back_with_their_ids_and_json_arguments(self):
+        llm = self.client()
+        reply = response(200, {"choices": [{"message": {"content": None, "tool_calls": [
+            {"type": "function", "function": {"name": "search_library", "arguments": '{"query": "heist"}'}}]}}]})
+        with mock.patch("chat.llm.requests.get", return_value=response(200, models())), \
+             mock.patch("chat.llm.requests.post", return_value=reply) as post:
+            message = llm.chat([])
+            self.assertEqual(message["tool_calls"][0]["id"], "call_0")
+            llm.chat([message, {"role": "tool", "tool_call_id": "call_0", "tool_name": "search_library", "content": "[]"},
+                      {"role": "assistant", "content": "", "tool_calls": [{"function": {"name": "x", "arguments": {"a": 1}}}]}])
+        sent = post.call_args.kwargs["json"]["messages"]
+        self.assertEqual(sent[1], {"role": "tool", "content": "[]", "tool_call_id": "call_0"})
+        self.assertEqual(sent[2]["tool_calls"][0]["function"]["arguments"], '{"a": 1}')
+
+    def test_server_off_unreachable_slow_or_failing_is_unavailable(self):
+        llm = self.client()
+        with mock.patch("chat.llm.requests.get", side_effect=requests.ConnectTimeout()):
+            self.assertFalse(llm.available())
+            with self.assertRaisesRegex(LLMUnavailable, "isn't answering"):
                 llm.chat([])
-        with mock.patch("chat.llm.requests.get", return_value=response(200, {})), \
-             mock.patch("chat.llm.requests.post", return_value=response(404, {"error": "model 'm' not found"})):
-            with self.assertRaisesRegex(LLMUnavailable, "isn't pulled"):
-                llm.chat([])
+        failed = response(503)
+        failed.text = '{"error": "failed to load model"}'
+        with mock.patch("chat.llm.requests.get", return_value=response(200, models())):
+            for failure, message in ((requests.ConnectionError(), "isn't reachable"), (requests.ReadTimeout(), "busy"),
+                                     (failed, "couldn't answer \\(503: .*failed to load")):
+                kw = {"side_effect": failure} if isinstance(failure, Exception) else {"return_value": failure}
+                with mock.patch("chat.llm.requests.post", **kw), self.assertRaisesRegex(LLMUnavailable, message):
+                    llm.chat([])
+            with mock.patch("chat.llm.requests.post", return_value=response(400, {"error": "bad"})):
+                with self.assertRaises(requests.HTTPError):     # a bad request is a bug, not an outage
+                    llm.chat([])
+
+    def test_no_chat_model_is_unavailable(self):
+        with mock.patch("chat.llm.requests.get", return_value=response(200, {"data": [{"id": "Embed-0.6B"}]})):
+            with self.assertRaisesRegex(LLMUnavailable, "no chat model"):
+                self.client().chat([])
 
 
 class TestTMDBLookup(unittest.TestCase):

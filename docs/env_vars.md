@@ -15,11 +15,9 @@ Two `.env` files are required: one at the repository root for the Python service
 | `EMBRACE_PICKS_EXCLUDE_USERS` | No | Comma-separated Emby user names that get no recommendation playlists, and are left out of the picks preview. |
 | `DISCORD_BOT_TOKEN` | For the chat-bot | Token of EMBRACE's Discord bot (see [Chat-bot](modules/chat.md#setup)). |
 | `EMBRACE_DISCORD_USERS` | For the chat-bot | Who's who: comma-separated `<discord user id>:<emby user name>` pairs. Only linked people can chat. |
-| `EMBRACE_LLM_HOSTS` | For the chat-bot | Comma-separated Ollama URLs to try in order, e.g. `http://<gpu machine>:11435,http://<mac>:11435`. Default `http://localhost:11435`. |
-| `EMBRACE_LLM_MODEL` | No | Ollama model for the chat-bot (and for `scripts/llm/llm.sh` to pull). Must support tool calling. Default `qwen3:8b`. |
-| `EMBRACE_LLM_NUM_CTX` | No | The model's context window in tokens. Default `8192`. |
-| `EMBRACE_LLM_KEEP_ALIVE` | No | How long the model stays in memory after a message (Ollama duration, e.g. `15m`). Default `15m`. |
-| `EMBRACE_LLM_PORT` | No | Port `scripts/llm/llm.sh` runs Ollama on. Default `11435`. |
+| `EMBRACE_LLM_URL` | For the chat-bot | The llama.cpp server (`llama-server`) EMBRACE's LLM features use, e.g. `http://<gpu machine>:8080`. Default `http://localhost:8080`. |
+| `EMBRACE_LLM_MODEL` | No | Chat model to load when the server has none loaded (whichever is loaded is used, so someone else's isn't swapped out). Must support tool calling. Default: the first model the server lists. |
+| `EMBRACE_EMBED_MODEL` | No | The server's embedding model, for search by meaning. Default `Qwen3-Embedding-0.6B-Q8_0`. |
 | `ENVIRONMENT` | Optional | Controls connector debug logging. Use `dev`, `staging`, or `prod`; defaults to `dev` when unset. |
 | `SQLITE_DB_NAME` | Optional | Overrides the default SQLite file name (`EMBRACE_SQLITE_DB.db`). The database is stored under `sqlite_db/` and is created automatically if missing. |
 | `SQLITE_KEEP_BACKUPS` | Optional | Number of dated database backups the refresh keeps in `sqlite_db/backups/` (one is made per run). Default `30`. `sqlite_db/archive/` is never pruned. |

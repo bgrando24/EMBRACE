@@ -75,14 +75,16 @@ def preview(picks: pd.DataFrame, statuses: dict[str, str], when: datetime, pages
     """
     lines = [f"**Daily picks** - {when.strftime('%a %d %b')}"]
     for user_name, mine in picks.groupby("user_name", sort=True):
-        lines.append(f"**{user_name}**" + (f" - playlists {statuses[user_name]}" if user_name in statuses else ""))
+        user = [f"**{user_name}**" + (f" - playlists {statuses[user_name]}" if user_name in statuses else "")]
         for lst in (FRESH, BACK_CATALOGUE):
             top = mine[mine["list"] == lst].nsmallest(PREVIEW_PER_LIST, "rank")
             if len(top):
-                lines.append(f"  {LIST_LABELS[lst]}: " + ", ".join(label(r) for r in top.itertuples()))
+                user.append(f"  {LIST_LABELS[lst]}: " + ", ".join(label(r) for r in top.itertuples()))
         top = mine[mine["list"] == TO_REQUEST].sort_values("rank")
         if len(top):
-            lines.append(f"  {LIST_LABELS[TO_REQUEST]}: " + ", ".join(request_link(r, pages) for r in top.itertuples()))
+            user.append(f"  {LIST_LABELS[TO_REQUEST]}: " + ", ".join(request_link(r, pages) for r in top.itertuples()))
+        # one "line" per user, so a message too long for Discord is split between users, never within one
+        lines.append("\n".join(user))
     return lines
 
 

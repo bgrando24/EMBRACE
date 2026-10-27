@@ -10,6 +10,18 @@ from .cosine_knn import CosineKNN
 MOVIE_EQUIVALENT_HOURS = 2.0
 # titles below this interest are left out of the profile (opened and abandoned), but are still never recommended
 MIN_INTEREST = 0.1
+# a title the user gave up on (see `abandoned()`): a movie stopped before this share of it, or a series left after at
+# most this many episodes, and untouched for this many days since (so one watched a bit each evening isn't counted)
+ABANDONED_MOVIE_MAX = 0.5
+ABANDONED_MOVIE_DAYS = 14
+ABANDONED_SERIES_MAX_ITEMS = 2
+ABANDONED_SERIES_DAYS = 30
+# titles opened for less than this aren't counted as given up on (a stray click, or checking something)
+ABANDONED_MIN_INTEREST = 0.0
+# how much an abandoned title counts against the profile, against 1 for a finished movie; None: not at all (they're
+# then treated like any other title by interest), 0: left out of the profile but not subtracted
+# Off: at 0.1-1.0 neither evaluation moved beyond noise (Oct 2026, see docs/modules/ml.md)
+NEGATIVE_WEIGHT: Optional[float] = None
 
 
 def title_interest(user_titles: pd.DataFrame) -> pd.Series:
@@ -35,25 +47,51 @@ def title_interest(user_titles: pd.DataFrame) -> pd.Series:
     return movie.where(user_titles["unit_type"] == "Movie", series)
 
 
+def abandoned(user_titles: pd.DataFrame, now=None, min_interest: float = ABANDONED_MIN_INTEREST) -> pd.Series:
+    """
+    Which (user, title) rows the user gave up on, as of `now` (DEFAULT: now): a movie stopped before
+    ABANDONED_MOVIE_MAX of it and untouched for ABANDONED_MOVIE_DAYS, or a series left after at most
+    ABANDONED_SERIES_MAX_ITEMS episodes and untouched for ABANDONED_SERIES_DAYS. Only watch history counts (not Emby's
+    played flags or requests), and only titles watched for at least `min_interest` (see `title_interest()`).
+
+    Returns:
+        Series: bool, aligned to user_titles' index
+    """
+    now = pd.Timestamp.now() if now is None else pd.Timestamp(now)
+    idle_days = (now - pd.to_datetime(user_titles["last_watched_timestamp"], errors="coerce")).dt.total_seconds() / 86400
+    interest = title_interest(user_titles)
+    movie = user_titles["unit_type"] == "Movie"
+    gave_up = ((movie & (interest < ABANDONED_MOVIE_MAX) & (idle_days > ABANDONED_MOVIE_DAYS))
+               | (~movie & (user_titles["items_watched"] <= ABANDONED_SERIES_MAX_ITEMS) & (idle_days > ABANDONED_SERIES_DAYS)))
+    if "source" in user_titles:
+        gave_up &= user_titles["source"].isna()
+    return gave_up & (interest >= min_interest)
+
+
 class UserProfiles:
     """
     Per-user recommendations from watch history: each user's taste profile is the interest-weighted blend of the feature
-    vectors of everything they watched (see `title_interest()`), and recommendations are the titles closest to it.
-    Works with any `CosineKNN` model (`GenreKNN`, `ContentKNN`).
+    vectors of everything they watched (see `title_interest()`), minus what they gave up on (`abandoned()`, weighted
+    `negative_weight`), and recommendations are the titles closest to it. Works with any `CosineKNN` model
+    (`GenreKNN`, `ContentKNN`).
     """
 
-    def __init__(self, knn: CosineKNN, user_titles: pd.DataFrame, min_interest: float = MIN_INTEREST):
+    def __init__(self, knn: CosineKNN, user_titles: pd.DataFrame, min_interest: float = MIN_INTEREST,
+                 negative_weight: Optional[float] = NEGATIVE_WEIGHT):
         """
         Args:
             knn (CosineKNN): the recommender model, e.g. GenreKNN or ContentKNN
             user_titles (DataFrame): output of `PreProcess.get_user_title_stats()[0]`
             min_interest (float, optional): titles below this are left out of the profile - DEFAULT: MIN_INTEREST
+            negative_weight (float, optional): how much abandoned titles count against it - DEFAULT: NEGATIVE_WEIGHT
         """
         self.knn = knn
         self.min_interest = min_interest
+        self.negative_weight = negative_weight
         self.history = user_titles.assign(
             interest=title_interest(user_titles),
             in_model=user_titles["imdb_id"].map(lambda t: t in knn),
+            abandoned=abandoned(user_titles) if negative_weight is not None else False,
         )
 
     def users(self) -> pd.DataFrame:
@@ -113,7 +151,7 @@ class UserProfiles:
             ValueError: none of the user's titles are in the model with enough interest
         """
         titles = self.profile_titles(user_id)
-        profile = self.knn.profile_vector(titles["imdb_id"], titles["interest"])
+        profile = self.profile_vector(user_id)
         recs = self.knn.recommend_for_profile(
             profile, n=n, allowed=allowed, types=types, exclude=self.seen_by(user_id), boost=boost
         )
@@ -134,8 +172,18 @@ class UserProfiles:
 
     def taste_similarity(self, user_id: str) -> pd.Series:
         """Cosine similarity of every title in the model to the user's taste profile, by t_const (raises like `recommend()`)"""
-        titles = self.profile_titles(user_id)
-        return self.knn.similarity_to_profile(self.knn.profile_vector(titles["imdb_id"], titles["interest"]))
+        return self.knn.similarity_to_profile(self.profile_vector(user_id))
+
+    def profile_vector(self, user_id: str) -> np.ndarray:
+        """The user's taste profile: `profile_titles()` by interest, minus `abandoned_titles()` (raises like `recommend()`)"""
+        titles, gave_up = self.profile_titles(user_id), self.abandoned_titles(user_id)
+        weights = [*titles["interest"], *[-(self.negative_weight or 0.0)] * len(gave_up)]
+        return self.knn.profile_vector([*titles["imdb_id"], *gave_up["imdb_id"]], weights)
+
+    def abandoned_titles(self, user_id: str) -> pd.DataFrame:
+        """The user's titles that count against their profile (see `abandoned()`), in the model"""
+        h = self._history_of(user_id)
+        return h[h["in_model"] & h["abandoned"]][["imdb_id", "unit_name", "unit_type", "items_watched", "interest"]]
 
     def seen_by(self, user_id: str) -> list[str]:
         """Titles never to recommend: everything watched or marked played - but not titles only requested, since
@@ -152,4 +200,4 @@ class UserProfiles:
         return h
 
     def _in_profile(self, h: pd.DataFrame) -> pd.Series:
-        return h["in_model"] & (h["interest"] >= self.min_interest)
+        return h["in_model"] & (h["interest"] >= self.min_interest) & ~h["abandoned"]

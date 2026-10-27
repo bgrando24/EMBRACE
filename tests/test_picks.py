@@ -7,7 +7,7 @@ import pandas as pd
 
 from connectors import EmbyConnector, SQLiteConnector
 from ml import ContentKNN, Freshness, PreProcess, Recommender, Requests, UserProfiles
-from ml.picks import BACK_CATALOGUE, FRESH, TO_REQUEST
+from ml.picks import BACK_CATALOGUE, FRESH, TO_REQUEST, diversify
 from test_content_knn import CONTENT
 from test_freshness import ADDITIONS
 from test_tmdb_content import details, response
@@ -60,6 +60,28 @@ class TestRecommenderPicks(unittest.TestCase):
         self.assertEqual(set(self.rec.all_picks(n=1, when="2026-03-01", min_titles=1, users={"u2"})["user_id"]), {"u2"})
         self.assertTrue(self.rec.all_picks(min_titles=5).empty)
 
+
+
+class TestDiversify(unittest.TestCase):
+
+    def setUp(self):
+        self.knn = ContentKNN(CONTENT)
+
+    def test_one_title_per_franchise_the_rest_moved_after(self):
+        franchise = pd.Series({"x1": "Saga", "x2": "Saga"})
+        self.assertEqual(diversify(["x1", "x2", "x3", "x4"], self.knn, franchise, top=2), ["x1", "x3", "x2", "x4"])
+
+    def test_near_duplicates_without_a_franchise(self):
+        self.assertGreaterEqual(self.knn.similarity_between(["tt1"], ["tt2"])[0, 0], 0.5)    # Heist One / Two
+        self.assertEqual(diversify(["tt1", "tt2", "tt5"], self.knn, pd.Series(dtype=object), top=2), ["tt1", "tt5", "tt2"])
+
+    def test_picks_lists_have_no_repeats(self):
+        knn = ContentKNN(CONTENT)
+        rec = Recommender(knn=knn, profiles=UserProfiles(knn, pd.DataFrame([watched("tt3"), watched("tt6")])),
+                          library={t for t in CONTENT["t_const"] if t in knn}, freshness=Freshness(ADDITIONS),
+                          requests=Requests(pd.DataFrame(columns=["user_id", "t_const", "requested_at"])), content=CONTENT)
+        for _, lst in rec.picks("u1", n=3, when="2026-03-01").groupby("list"):
+            self.assertFalse({"tt1", "tt2"} <= set(lst["t_const"]), lst["primary_name"].tolist())
 
 def item(item_id, item_type, imdb=None, series_id=None, season=None, episode=None, created="2026-01-01"):
     return {"Id": item_id, "Name": item_id, "Type": item_type, "RunTimeTicks": 1500 * 10_000_000, "SeriesId": series_id,

@@ -29,6 +29,37 @@ REQUEST_MIN_VOTES = 5_000
 # users with fewer profile titles than this get no picks: a handful of titles is noise, not taste
 MIN_PROFILE_TITLES = 5
 
+# each list has at most one title per franchise (TMDB collection), and none this similar to a title above it
+# (spin-offs, remakes, sequels without a collection) - see `diversify()`. In Oct 2026's lists only one pair repeated
+# (two Conjuring films, 0.56); other titles in a list were 0.37 apart at most
+NEAR_DUPLICATE_SIMILARITY = 0.5
+# candidates ranked per list, as a multiple of its length, so titles left out for that are replaced by the next best
+DIVERSITY_POOL = 3
+
+def diversify(t_consts: list[str], knn: CosineKNN, collection: pd.Series, top: int) -> list[str]:
+    """
+    `t_consts` (best first) reordered so the first `top` have at most one title per franchise (`collection`:
+    t_const -> TMDB collection name) and none NEAR_DUPLICATE_SIMILARITY or more similar to a title above it. The titles
+    left out of the first `top` follow them, then the rest, each in their own order.
+    """
+    kept: list[str] = []
+    later: list[str] = []
+    franchises: set[str] = set()
+    for t in t_consts:
+        if len(kept) == top:
+            break
+        franchise = collection.get(t)
+        franchise = franchise if isinstance(franchise, str) and franchise else None
+        repeat = franchise in franchises
+        if not repeat and t in knn:
+            above = [k for k in kept if k in knn]
+            repeat = bool(above) and knn.similarity_between([t], above).max() >= NEAR_DUPLICATE_SIMILARITY
+        (later if repeat else kept).append(t)
+        if franchise and not repeat:
+            franchises.add(franchise)
+    return kept + later + t_consts[len(kept) + len(later):]
+
+
 PICK_COLS = ["list", "rank", "t_const", "primary_name", "start_year", "type", "similarity", "score",
              "because_you_watched", "shared", "added_days_ago", "you_requested"]
 
@@ -82,6 +113,20 @@ class Recommender:
         )
 
     @functools.cached_property
+    def collections(self) -> pd.Series:
+        """t_const -> TMDB collection (franchise) name, for the library and the titles beyond it"""
+        frames = [f[["t_const", "collection"]] for f in (self.content, self.discovery) if f is not None and "collection" in f]
+        if not frames:
+            return pd.Series(dtype=object)
+        c = pd.concat(frames).dropna().drop_duplicates("t_const")
+        return c.set_index("t_const")["collection"]
+
+    def _diverse(self, recs: pd.DataFrame, n: int, knn: CosineKNN) -> pd.DataFrame:
+        """The best `n` of `recs` after `diversify()`"""
+        order = diversify(recs["t_const"].tolist(), knn, self.collections, n)[:n]
+        return recs.set_index("t_const").loc[order].reset_index()
+
+    @functools.cached_property
     def wide(self) -> tuple[CosineKNN, UserProfiles]:
         """
         The model and profiles over the library AND the titles beyond it (`discovery`), so the two can be compared:
@@ -104,11 +149,11 @@ class Recommender:
         """
         if self.discovery is None or not len(self.discovery):
             return pd.DataFrame(columns=PICK_COLS)
-        _, profiles = self.wide
+        knn, profiles = self.wide
         d = self.discovery
         good = (d["avg_rating"].fillna(0) >= REQUEST_MIN_RATING) & (d["num_votes"].fillna(0) >= REQUEST_MIN_VOTES)
         allowed = set(d.loc[good, "t_const"]) - self.library - self.requests.titles()
-        out = profiles.recommend(user_id, n=n, allowed=allowed)
+        out = self._diverse(profiles.recommend(user_id, n=n * DIVERSITY_POOL, allowed=allowed), n, knn)
         out = out.assign(list=TO_REQUEST, rank=range(1, len(out) + 1), score=out["similarity"],
                          added_days_ago=float("nan"), you_requested=False)
         return out.reindex(columns=PICK_COLS)
@@ -121,7 +166,7 @@ class Recommender:
     def picks(self, user_id: str, n: int = 10, when=None, n_request: int = 0) -> pd.DataFrame:
         """
         The user's two lists, fresh first, then `n_request` titles to request (`to_request()`). A title is in at most
-        one of them.
+        one of them, and each list has at most one title per franchise and no near-duplicates (`diversify()`).
 
         Args:
             user_id (str): canonical user ID
@@ -137,12 +182,14 @@ class Recommender:
         lists = []
         if len(added):     # no dates until a refresh has stored Emby's DateCreated
             mine = self.requests.boost(when, user_id=user_id)
-            fresh = self.profiles.recommend(user_id, n=n, allowed=self.library, boost=self.freshness.boost(when).add(mine, fill_value=0))
+            fresh = self.profiles.recommend(user_id, n=n * DIVERSITY_POOL, allowed=self.library,
+                                            boost=self.freshness.boost(when).add(mine, fill_value=0))
+            fresh = self._diverse(fresh, n, self.knn)
             fresh["added_days_ago"] = fresh["t_const"].map(added["age_days"]).round(0)
             fresh["you_requested"] = fresh["t_const"].isin(mine.index)
             lists.append(fresh.assign(list=FRESH))
         taken = set(lists[0]["t_const"]) if lists else set()
-        back = self.profiles.recommend(user_id, n=n, allowed=self.library - taken)
+        back = self._diverse(self.profiles.recommend(user_id, n=n * DIVERSITY_POOL, allowed=self.library - taken), n, self.knn)
         lists.append(back.assign(list=BACK_CATALOGUE, score=back["similarity"], added_days_ago=float("nan"), you_requested=False))
         if n_request > 0:
             lists.append(self.to_request(user_id, n=n_request))
